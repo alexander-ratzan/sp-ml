@@ -34,3 +34,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Agent ref schematics and images
+context_packages/
