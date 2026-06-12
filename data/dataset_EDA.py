@@ -66,6 +66,9 @@ SCHURCH_NEIGHBORHOOD_CMAP = {
 # ── Per-dataset configs ───────────────────────────────────────────────────────
 
 KEREN_CFG = dict(
+    publication="Keren et al. 2018",
+    technology="MIBI-TOF",
+    disease="TNBC",
     sample_col="SampleID",
     label_col="subtype",
     patient_col=None,
@@ -80,6 +83,9 @@ KEREN_CFG = dict(
 )
 
 SCHURCH_CFG = dict(
+    publication="Schürch et al. 2020",
+    technology="CODEX",
+    disease="CRC",
     sample_col="Region",
     label_col="group_name",
     patient_col="patients",
@@ -92,7 +98,26 @@ SCHURCH_CFG = dict(
     },
 )
 
+JACKSON_CFG = dict(
+    publication="Jackson & Fischer et al. 2020",
+    technology="IMC",
+    disease="Breast Cancer",
+    sample_col="image_name",
+    label_col="tumor_clinical_type",
+    patient_col="patient_id",
+    expr_layer="exprs",
+    cat_cols=[
+        "image_name", "patient_id", "patient_cohort",
+        "tumor_clinical_type", "tumor_ER_status", "tumor_PR_status", "tumor_HER2_status",
+        "tumor_grade", "cell_metacluster", "tumor_response",
+    ],
+    pinned_cmaps={},
+)
+
 PATWA_CFG = dict(
+    publication="Patwa et al. 2021",
+    technology="MIBI",
+    disease="TNBC",
     sample_col="patient_id",
     label_col="Architecture",
     patient_col=None,
@@ -140,7 +165,8 @@ def summarize_metadata(adata, cfg=KEREN_CFG):
     print(f"  {'Protein':<24} {'Min':>10} {'Median':>10} {'Max':>10}")
     print(f"  {'─'*56}")
     for protein in adata.var_names:
-        vals = np.asarray(adata[:, protein].X).flatten()
+        col = adata[:, protein].X
+        vals = col.toarray().flatten() if hasattr(col, 'toarray') else np.asarray(col).flatten()
         print(f"  {protein:<24} {vals.min():>10.3f} {np.median(vals):>10.3f} {vals.max():>10.3f}")
 
 
@@ -162,6 +188,61 @@ def cat_breakdown(adata, cfg=KEREN_CFG, cols=None):
         print(adata.obs[col].value_counts().to_string())
 
 
+def dataset_stats(adata, cfg):
+    """Extract a flat dict of summary statistics for the dataset overview table."""
+    sample_col  = cfg["sample_col"]
+    patient_col = cfg.get("patient_col")
+    label_col   = cfg["label_col"]
+
+    n_subjects = (
+        adata.obs[patient_col].nunique() if patient_col
+        else adata.obs[sample_col].nunique()
+    )
+    vals = sorted(
+        v for v in _to_str_series(adata.obs[label_col]).unique()
+        if v not in ("NA", "nan")
+    )
+    return dict(
+        publication=cfg.get("publication", ""),
+        technology=cfg.get("technology", ""),
+        disease=cfg.get("disease", ""),
+        condition=" / ".join(vals),
+        n_subjects=n_subjects,
+        n_samples=adata.obs[sample_col].nunique(),
+        n_cells=adata.n_obs,
+        n_markers=adata.n_vars,
+    )
+
+
+def overview_table(stats_list):
+    """Render a styled HTML comparison table from a list of dataset_stats dicts."""
+    df = pd.DataFrame(stats_list)
+    df = df.rename(columns={
+        "publication": "Publication",
+        "technology":  "Technology",
+        "disease":     "Disease",
+        "condition":   "Condition",
+        "n_subjects":  "Subjects",
+        "n_samples":   "Samples",
+        "n_cells":     "Cells",
+        "n_markers":   "Markers",
+    })
+    totals = pd.DataFrame([{
+        "Publication": "Total",
+        "Technology":  "",
+        "Disease":     "",
+        "Condition":   "",
+        "Subjects":    df["Subjects"].sum(),
+        "Samples":     df["Samples"].sum(),
+        "Cells":       df["Cells"].sum(),
+        "Markers":     "",
+    }])
+    df["Cells"] = df["Cells"].map("{:,}".format)
+    totals["Cells"] = totals["Cells"].map("{:,}".format)
+    df = pd.concat([df, totals], ignore_index=True)
+    display(df.style.hide(axis="index").set_properties(**{"text-align": "left"}))
+
+
 # ── Color helpers ─────────────────────────────────────────────────────────────
 
 _FALLBACK_COLOR = (0.7, 0.7, 0.7, 1.0)  # grey for unknown/NA values
@@ -180,9 +261,9 @@ def _to_rgba(color):
 
 def _build_color_map(series):
     """Build a str→RGBA dict from all unique values in series.
-    Uses tab20 for ≤20 categories, hsv for more to avoid color repetition."""
+    NA is always grey. Uses tab20 for ≤20 categories, hsv for more."""
     s = _to_str_series(series)
-    vals = sorted(s.unique())
+    vals = sorted(v for v in s.unique() if v != "NA")
     n = len(vals)
     if n <= 20:
         cmap = plt.get_cmap("tab20")
@@ -190,7 +271,9 @@ def _build_color_map(series):
     else:
         cmap = plt.get_cmap("hsv")
         colors = [cmap(i / n) for i in range(n)]
-    return {v: colors[i] for i, v in enumerate(vals)}
+    color_map = {v: colors[i] for i, v in enumerate(vals)}
+    color_map["NA"] = _FALLBACK_COLOR
+    return color_map
 
 
 def _resolve_color_map(color_by, adata, cfg):
@@ -282,7 +365,12 @@ def plot_sample(adata, sample_id, color_by=None, ax=None, s=6, dpi=150,
             ax.legend(handles=handles, fontsize=11, frameon=True,
                       loc="upper right", ncol=max(1, len(handles) // 12))
     elif color_by in sub.var_names:
-        expr = np.asarray(sub[:, color_by].X).flatten()
+        expr_layer = cfg.get("expr_layer")
+        if expr_layer and expr_layer in sub.layers:
+            col = sub.layers[expr_layer][:, sub.var_names.get_loc(color_by)]
+        else:
+            col = sub[:, color_by].X
+        expr = col.toarray().flatten() if hasattr(col, 'toarray') else np.asarray(col).flatten()
         _cont_scatter(ax, x, y, expr, s=s)
 
     if standalone:
@@ -316,7 +404,7 @@ def plot_samples(adata, sample_ids=None, color_by=None, n_cols=4, s=4, dpi=150,
     for j in range(i + 1, len(axes)):
         axes[j].set_visible(False)
 
-    fig.suptitle(f"{color_by}  —  {n} of {len(all_ids)} slices", fontsize=16, y=1.01)
+    fig.suptitle(f"Strata: {color_by}  —  {n} of {len(all_ids)} slices", fontsize=16, y=1.01)
 
     if color_map is not None:
         handles = _make_legend_handles(color_map)
@@ -350,7 +438,7 @@ def plot_all_samples(adata, color_by=None, n_cols=6, s=2, dpi=120, cfg=KEREN_CFG
     for j in range(i + 1, len(axes)):
         axes[j].set_visible(False)
 
-    fig.suptitle(color_by, fontsize=16, y=1.01)
+    fig.suptitle(f"Strata: {color_by}", fontsize=16, y=1.01)
 
     if color_map is not None:
         handles = _make_legend_handles(color_map)
