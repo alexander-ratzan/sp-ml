@@ -1,0 +1,4 @@
+[formats]
+# Auto-pair all notebooks in this directory with percent-format Python scripts.
+# Edit the .py file in Cursor; open the .ipynb in Jupyter to run and view outputs.
+notebooks = "ipynb,py:percent"

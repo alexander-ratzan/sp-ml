@@ -2,18 +2,6 @@
 
 ML workflows for spatial proteomics data. Raw datasets live outside the repo in `../data/`; all large files (`*.h5ad`, `*.csv`, `*.parquet`, `*.zarr`, `*.tiff`) are gitignored.
 
-## Structure
-
-```
-sp-ml/
-├── data/
-│   ├── dataset_parsers.py   # raw → AnnData parsers (Schurch, Patwa, ...)
-│   └── dataset_EDA.py       # AnnData analysis and visualization utilities
-├── models/                  # training scripts and model weights
-├── notebooks/
-│   └── EDA/                 # per-dataset exploratory notebooks
-└── context_packages/        # reference images (paper figure color maps)
-```
 
 ## Datasets
 
@@ -26,14 +14,35 @@ All datasets are loaded as `.h5ad` from `../data/<dataset>/`.
 | Patwa et al. 2021 | MIBI | TNBC | 190,240 | 44 | 38 |
 | Jackson & Fischer et al. 2020 | IMC | Breast Cancer | 1,240,267 | 45 | 723 |
 
+
+## Structure
+
+```
+sp-ml/
+├── models/                  # training scripts and model weights (Phase 2, empty)
+├── data/
+│   ├── parsers.py           # raw → AnnData parsers (parse_schurch2020, parse_patwa2021)
+│   ├── preprocessing.py     # expression diagnostics + arcsinh transform (exprs layer)
+│   └── EDA.py               # summaries, panel/celltype harmonization, spatial viz
+├── notebooks/
+│   └── EDA/                 # per-dataset + cross-dataset exploratory notebooks
+└── context_packages/        # reference images, figures, schematics (.gitignored)
+```
+
 ## Notebooks
 
-Per dataset EDA notebooks follow the same structure: load `.h5ad` → `summarize_metadata` → `spatial_info` → `cat_breakdown` → spatial visualizations.
+**Per-dataset** EDA notebooks (Keren, Schürch, Patwa, Jackson — full/Basel/Zurich cohorts) follow the same structure: load `.h5ad` → `summarize_metadata` → `spatial_info` → `cat_breakdown` → spatial visualizations.
+
+**Cross-dataset** notebooks:
+- `datasets_overview` — harmonized panel/cell-type coverage and a combined stats table across all four datasets.
+- `preprocessing_EDA` — expression diagnostics and arcsinh transform comparison across datasets.
 
 ## Setup
 
+The shared `.venv` and `requirements.txt` live in the parent workspace dir (one level above this repo):
+
 ```bash
-uv venv .venv --python 3.12
-source .venv/bin/activate
-uv pip install -r requirements.txt
+uv venv ../.venv --python 3.12
+source ../.venv/bin/activate
+uv pip install -r ../requirements.txt
 ```
