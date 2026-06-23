@@ -10,6 +10,7 @@ Spatial proteomics ML research. Phase 1 = data ingestion and EDA across four pub
 
 - `models/` — training and model development
 - `context_packages/` - images, figures, schematic references for task execution. only interface with when referred to.
+  - `context_packages/datasets_overview.md` — **authoritative dataset reference.** Per-dataset AnnData structure, preprocessing state, panel harmonization, and **spatial resolution + biologically-motivated graph-construction defaults** (µm/pixel, paper graph params, empirical NN spacing, recommended squidpy `spatial_neighbors` settings). Read before any cross-dataset or graph/neighborhood work.
 - `data/` - data parsers, loaders, preprocessing, EDA, and viz
 - `data/parsers.py` — raw format → AnnData. One `parse_<dataset><year>()` function per dataset. Currently `parse_schurch2020`, `parse_patwa2021` (Keren loads a downloaded `.h5ad`; Jackson is built by `../data/jacksonfischer2020/scripts/`).
 - `data/preprocessing.py` — expression diagnostics and transformation. Diagnostics (`expression_stats`, `expression_stats_table`, `marker_distributions`); arcsinh handling (`apply_arcsinh`, `prepare_exprs` → writes `exprs` layer + provenance to `adata.uns["preprocessing"]`).

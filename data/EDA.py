@@ -128,6 +128,12 @@ def normalize_panel(var_names, aliases=None, exclude=None):
     return {aliases.get(n, n) for n in var_names if n not in exclude}
 
 
+def shared_markers(adatas):
+    """Canonical markers present (after normalize_panel) in every dataset."""
+    sets = [normalize_panel(a.var_names) for a in adatas.values()]
+    return sorted(set.intersection(*sets))
+
+
 # ── Cell type normalization ───────────────────────────────────────────────────
 
 CELLTYPE_ALIASES = {
@@ -294,7 +300,8 @@ SCHURCH_CFG = dict(
     label_col="group_name",
     patient_col="patients",
     celltype_col="cell_type",
-    arcsinh_cofactor=5,      # raw counts
+    size_col="size",         # cell area (px) — enables step-1 size normalization
+    arcsinh_cofactor=0.5,    # applied to size-normalized (per-pixel) values, not raw counts
     cat_cols=[
         "Region", "patients", "tma_ab", "tma_12", "groups", "group_name",
         "cell_type", "neighborhood_name", "neighborhood_id", "neighborhood10",
@@ -321,6 +328,9 @@ JACKSON_CFG = dict(
     ],
     pinned_cmaps={},
 )
+
+JACKSON_ZURICH_CFG = {**JACKSON_CFG, "publication": "Jackson & Fischer et al. 2020 — Zurich"}
+JACKSON_BASEL_CFG  = {**JACKSON_CFG, "publication": "Jackson & Fischer et al. 2020 — Basel"}
 
 PATWA_CFG = dict(
     publication="Patwa et al. 2021",
@@ -392,8 +402,12 @@ def cat_breakdown(adata, cfg=KEREN_CFG, cols=None):
         print(adata.obs[col].value_counts().to_string())
 
 
-def dataset_stats(adata, cfg):
-    """Extract a flat dict of summary statistics for the dataset overview table."""
+def dataset_stats(adata, cfg, note=""):
+    """Extract a flat dict of summary statistics for the dataset overview table.
+
+    n_markers is the biological panel size after dropping technical channels
+    and harmonizing aliases (same count as shown in the panel heatmap).
+    """
     sample_col  = cfg["sample_col"]
     patient_col = cfg.get("patient_col")
     label_col   = cfg["label_col"]
@@ -414,7 +428,8 @@ def dataset_stats(adata, cfg):
         n_subjects=n_subjects,
         n_samples=adata.obs[sample_col].nunique(),
         n_cells=adata.n_obs,
-        n_markers=adata.n_vars,
+        n_markers=len(normalize_panel(adata.var_names)),
+        note=note,
     )
 
 
@@ -430,6 +445,7 @@ def overview_table(stats_list):
         "n_samples":   "Samples",
         "n_cells":     "Cells",
         "n_markers":   "Markers",
+        "note":        "Note",
     })
     totals = pd.DataFrame([{
         "Publication": "Total",
@@ -440,11 +456,16 @@ def overview_table(stats_list):
         "Samples":     df["Samples"].sum(),
         "Cells":       df["Cells"].sum(),
         "Markers":     "",
+        "Note":        "",
     }])
     df["Cells"] = df["Cells"].map("{:,}".format)
     totals["Cells"] = totals["Cells"].map("{:,}".format)
     df = pd.concat([df, totals], ignore_index=True)
-    display(df.style.hide(axis="index").set_properties(**{"text-align": "left"}))
+
+    cols = [c for c in df.columns if c != "Note"]
+    if "Note" in df.columns and not df["Note"].eq("").all():
+        cols.append("Note")
+    display(df[cols].style.hide(axis="index").set_properties(**{"text-align": "left"}))
 
 
 # ── Color helpers ─────────────────────────────────────────────────────────────

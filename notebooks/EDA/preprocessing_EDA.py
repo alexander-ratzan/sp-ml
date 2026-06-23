@@ -16,17 +16,32 @@
 # %% [markdown]
 # # Preprocessing EDA
 #
-# Standard 4-step consensus pipeline for cross-platform spatial proteomics:
+# Cross-platform spatial proteomics preprocessing, mirroring the **Risom et al. 2026**
+# MIBI pipeline:
 #
-# 1. **Cell size normalization** — divide raw intensities by cell area to remove size bias (optional per dataset)
-# 2. **Variance stabilization** — arcsinh transform (MIBI/IMC: cofactor ~1–5; CODEX: arcsinh or log1p)
-# 3. **Outlier capping (winsorization)** — cap at 99th or 99.9th percentile to suppress antibody aggregates
-# 4. **Standardization** — z-score per marker (mean=0, std=1) across all cells for cross-dataset comparability
+# 1. **Cell size normalization** — scale each cell's mean marker intensity by cell area
+#    (→ per-pixel intensity), removing cell-size bias.
+# 2. **Variance stabilization** — `arcsinh(x / cofactor)`.
+# 3. **Winsorization** — cap each marker at its 99.9th percentile to suppress antibody aggregates.
+# 4. **0–1 normalization** — per-marker min-max scaling for cross-dataset comparability.
 #
-# **Goal:** populate `layers["exprs"]` with step 2 output for all datasets; steps 3–4 applied
-# before joint embedding. `X` stays raw throughout.
+# > **Divergence from Risom:** Risom scales by area *and then multiplies by the dataset
+# > mean cell area*. We omit the mean-area rescale — Patwa's published matrix is already
+# > per-pixel with no area column to recover the constant, so for consistency no dataset
+# > gets it. The omission is a global multiplicative factor absorbed by the arcsinh
+# > cofactor; it can be reinstated per-dataset later. Risom also uses 0–1 normalization
+# > (not z-score), which we follow.
 #
-# > All transformed datasets are held in-memory as `adatas`. No files written until strategy is finalised.
+# **Layer scheme** (`X` stays raw throughout):
+#
+# | Layer | Contents |
+# |---|---|
+# | `X` | raw (untouched) |
+# | `layers["size_norm"]` | step 1 output (Schurch only — the only raw dataset with an area column) |
+# | `layers["exprs"]` | step 2 output, winsorized in place at step 3 |
+# | `layers["exprs_norm"]` | step 4 output — **final modeling layer** |
+#
+# > All datasets held in-memory as `adatas`. No files written until the strategy is finalized.
 
 # %%
 # %load_ext autoreload
@@ -37,12 +52,19 @@ from pathlib import Path
 _r = next(p for p in [Path().resolve(), *Path().resolve().parents] if (p / 'data').is_dir() and (p / 'notebooks').is_dir())
 if str(_r) not in sys.path: sys.path.insert(0, str(_r))
 
+import numpy as np
+import pandas as pd
+import scipy.sparse as sp
 import anndata as ad
+from IPython.display import display
 
-from data.EDA import KEREN_CFG, SCHURCH_CFG, PATWA_CFG, JACKSON_CFG
+from data.EDA import (
+    KEREN_CFG, SCHURCH_CFG, PATWA_CFG, JACKSON_CFG, shared_markers,
+)
 from data.preprocessing import (
-    expression_stats, expression_stats_table,
-    marker_distributions, prepare_exprs,
+    expression_stats, expression_stats_table, marker_distributions,
+    plot_marker_distributions, prepare_exprs,
+    apply_size_norm, apply_arcsinh, apply_winsorize, apply_minmax,
 )
 
 DATASETS = [
@@ -53,134 +75,218 @@ DATASETS = [
 ]
 
 # %% [markdown]
-# ## 1. Raw Expression Diagnostics
+# ## 0. Load datasets
 #
-# What lives in `X` and any existing layers for each dataset, before we touch anything.
-# The "Prior preprocessing (X)" column documents what the data publisher already applied.
+# Load fully into memory and tag each with `uns["dataset"]` so the diagnostic plots can
+# self-label.
 
 # %%
-# What the data publisher already applied to each layer, for documentation
+adatas = {}
+for name, path, cfg in DATASETS:
+    print(f'Loading {name} ...')
+    adata = ad.read_h5ad(path)
+    adata.uns['dataset'] = name
+    adatas[name] = adata
+
+SHARED = shared_markers(adatas)
+print(f'\n{len(SHARED)} shared markers across all datasets:\n{SHARED}')
+
+# %% [markdown]
+# ## 1. Preprocessing Plan
+#
+# What each dataset's `X` already contains and which steps it still needs. Keren and
+# Jackson arrive fully transformed by their publishers; only Schurch and Patwa start from
+# raw counts. Steps 3–4 are applied uniformly to all datasets.
+#
+# | Dataset | Tech | `X` state | Step 1 (size norm) | Step 2 (arcsinh) | Steps 3–4 |
+# |---|---|---|---|---|---|
+# | Keren 2018 | MIBI-TOF | arcsinh (Nolan pipeline) | — already done | copy `X` → `exprs` | ✓ winsorize + 0–1 |
+# | Schurch 2020 | CODEX | raw counts | ✓ `X / size` | `arcsinh(./0.5)` | ✓ winsorize + 0–1 |
+# | Patwa 2021 | MIBI | per-pixel (area-norm upstream) | — done upstream | `arcsinh(./5)` | ✓ winsorize + 0–1 |
+# | Jackson 2020 | IMC | arcsinh cofactor=1 (`exprs` layer) | — already done | use existing `exprs` | ✓ winsorize + 0–1 |
+
+# %% [markdown]
+# ### 1a. Raw expression diagnostics
+#
+# What lives in `X` and any publisher-provided layers, before we touch anything. The
+# `prior_preproc` column documents what each publisher already applied.
+
+# %%
 PRIOR_PREPROC = {
-    ('Keren 2018',   'X'):         'arcsinh (Nolan lab MIBI pipeline, background-subtracted)',
-    ('Schurch 2020', 'X'):         'raw counts (summed pixel intensities)',
-    ('Patwa 2021',   'X'):         'raw counts (summed pixel intensities)',
-    ('Jackson 2020', 'X'):         'raw counts (summed pixel intensities)',
-    ('Jackson 2020', 'exprs'):     'arcsinh cofactor=1 (Jackson-Fischer IMC pipeline)',
-    ('Jackson 2020', 'quant_norm'):'quantile normalized [0, 1]',
+    ('Keren 2018',   'X'):          'arcsinh (Nolan lab MIBI pipeline, background-subtracted)',
+    ('Schurch 2020', 'X'):          'raw counts (summed pixel intensities)',
+    ('Patwa 2021',   'X'):          'per-pixel mean (area-normalized upstream by RASP-MIBI)',
+    ('Jackson 2020', 'X'):          'raw counts (summed pixel intensities)',
+    ('Jackson 2020', 'exprs'):      'arcsinh cofactor=1 (Jackson-Fischer IMC pipeline)',
+    ('Jackson 2020', 'quant_norm'): 'quantile normalized [0, 1]',
 }
 
 raw_records = []
-for name, path, cfg in DATASETS:
-    adata = ad.read_h5ad(path, backed='r')
+for name, _, _ in DATASETS:
+    adata = adatas[name]
     s = expression_stats(adata, layer=None)
-    s.update(dataset=name, layer='X',
-             prior_preproc=PRIOR_PREPROC.get((name, 'X'), ''))
+    s.update(dataset=name, layer='X', prior_preproc=PRIOR_PREPROC.get((name, 'X'), ''))
     raw_records.append(s)
-    for extra_layer in ('exprs', 'quant_norm'):
-        if extra_layer in adata.layers:
-            s2 = expression_stats(adata, layer=extra_layer)
-            s2.update(dataset=name, layer=extra_layer,
-                      prior_preproc=PRIOR_PREPROC.get((name, extra_layer), ''))
+    for extra in ('exprs', 'quant_norm'):
+        if extra in adata.layers:
+            s2 = expression_stats(adata, layer=extra)
+            s2.update(dataset=name, layer=extra, prior_preproc=PRIOR_PREPROC.get((name, extra), ''))
             raw_records.append(s2)
-    adata.file.close()
 
 expression_stats_table(raw_records)
 
 # %% [markdown]
-# ### Raw distribution preview — Ki67
+# ### 1b. Raw distributions — shared markers (PRE)
 #
-# Ki67 is present in all four datasets under the same name.
-# Schurch and Patwa show raw-count distributions; Keren and Jackson (`exprs`) are already arcsinh-compressed.
+# Per-dataset grids over the shared marker panel, straight from `X`. This is the visual
+# baseline: note the wildly different scales (Schurch raw counts in the thousands, Keren
+# already arcsinh-compressed) that the pipeline is meant to harmonize.
 
 # %%
-adatas_raw = {}
-for name, path, cfg in DATASETS:
-    adata = ad.read_h5ad(path, backed='r')
-    adatas_raw[name] = adata
-
-marker_distributions(adatas_raw, marker='Ki67', layer=None)
-
-for adata in adatas_raw.values():
-    adata.file.close()
-del adatas_raw
+for name, _, _ in DATASETS:
+    plot_marker_distributions(adatas[name], layer=None, markers=SHARED)
 
 # %% [markdown]
-# ## 2. Arcsinh Transformation (Step 2 — Variance Stabilization)
+# ## 2. Step 1 — Cell Size Normalization
 #
-# Populate `layers["exprs"]` for all datasets. Cofactor TBD for Schurch (see sweep below).
-#
-# | Dataset | Technology | X contains | Action for `exprs` |
-# |---|---|---|---|
-# | Keren 2018 | MIBI-TOF | arcsinh already applied | copy X → `exprs` |
-# | Schurch 2020 | CODEX | raw counts | `arcsinh(X / cofactor)` — cofactor TBD from sweep |
-# | Patwa 2021 | MIBI | raw counts | `arcsinh(X / 5)` |
-# | Jackson 2020 | IMC | raw counts | `exprs` already exists (arcsinh cofactor=1) |
+# Only **Schurch** is both raw-count *and* has a cell-area column (`obs["size"]`), so it is
+# the only dataset normalized here (`X / size` → `layers["size_norm"]`). Patwa was already
+# area-normalized upstream; Keren and Jackson arrive pre-transformed.
 
 # %%
-adatas = {}
-post_records = []
+apply_size_norm(adatas['Schurch 2020'], size_col='size')
 
-for name, path, cfg in DATASETS:
-    print(f'Loading {name} ...')
-    adata = ad.read_h5ad(path)
-    prepare_exprs(adata, cfg)
-    s = expression_stats(adata, layer='exprs')
-    s.update(dataset=name, layer='exprs')
-    post_records.append(s)
-    adatas[name] = adata
-    print(f'  done — layers: {list(adata.layers.keys())}')
+expression_stats_table([
+    {**expression_stats(adatas['Schurch 2020'], layer=None),       'dataset': 'Schurch 2020', 'layer': 'X (raw)'},
+    {**expression_stats(adatas['Schurch 2020'], layer='size_norm'), 'dataset': 'Schurch 2020', 'layer': 'size_norm'},
+])
 
 # %% [markdown]
-# ## 3. Post-Transform Diagnostics
+# ### 2a. Schurch cofactor sweep (on size-normalized values)
 #
-# All datasets should now show comparable arcsinh-compressed ranges (p99 ≈ 3–5, no raw-count outliers).
-
-# %% [markdown]
-# ## 3a. Schurch Cofactor Sweep
-#
-# Schurch raw counts have a much larger dynamic range than the other datasets (median=71, p99=4291).
-# Sweep cofactors to find the value that brings Schurch's post-transform p99 in line with
-# Keren (~3.9) and Jackson (~4.3).
+# The earlier ~150 cofactor was an artifact of applying arcsinh to *raw summed counts*.
+# After size normalization the values are per-pixel means (median ≈ 0.015), so the
+# appropriate cofactor is small. The sweep below confirms cofactor ≈ 0.5 gives a
+# well-spread distribution (final range is set by step 4, so the cofactor only governs
+# shape).
 
 # %%
-import numpy as np
-import scipy.sparse as sp
-import pandas as pd
-from IPython.display import display
-
-# Reference p99 values from already-transformed datasets
-reference_p99 = {
-    'Keren 2018':   3.89,
-    'Jackson 2020': 4.26,
-}
-
-# Sweep cofactors on Schurch raw X
-schurch_raw = adatas['Schurch 2020'].X
-if sp.issparse(schurch_raw):
-    schurch_raw = schurch_raw.toarray()
-v = schurch_raw.astype(float).flatten()
-v = v[v > 0]  # nonzero only — zeros stay zero regardless of cofactor
+sn = adatas['Schurch 2020'].layers['size_norm']
+v = np.asarray(sn, dtype=float).flatten()
+v = v[v > 0]
 
 rows = []
-for cofactor in [5, 10, 20, 50, 100, 150, 200, 500]:
+for cofactor in [0.1, 0.2, 0.5, 1, 2, 5]:
     t = np.arcsinh(v / cofactor)
-    rows.append(dict(
-        cofactor=cofactor,
-        median=round(float(np.median(t)), 3),
-        p99=round(float(np.percentile(t, 99)), 3),
-        max=round(float(t.max()), 3),
-    ))
+    rows.append(dict(cofactor=cofactor,
+                     median=round(float(np.median(t)), 3),
+                     p99=round(float(np.percentile(t, 99)), 3),
+                     max=round(float(t.max()), 3)))
+display(pd.DataFrame(rows).style.hide(axis='index').set_properties(**{'text-align': 'left'}))
 
-df = pd.DataFrame(rows)
-df['p99 vs Keren'] = (df['p99'] - reference_p99['Keren 2018']).map('{:+.2f}'.format)
-df['p99 vs Jackson'] = (df['p99'] - reference_p99['Jackson 2020']).map('{:+.2f}'.format)
-display(df.style.hide(axis='index').set_properties(**{'text-align': 'left'}))
+# %% [markdown]
+# ## 3. Step 2 — Arcsinh Transformation
+#
+# `prepare_exprs()` brings every dataset to the common `layers["exprs"]` checkpoint:
+# Schurch sources from `size_norm` (cofactor 0.5), Patwa applies `arcsinh(X/5)`, Keren
+# copies its already-arcsinh `X`, Jackson reuses its publisher `exprs` layer.
 
 # %%
+post_records = []
+for name, _, cfg in DATASETS:
+    prepare_exprs(adatas[name], cfg)
+    s = expression_stats(adatas[name], layer='exprs')
+    s.update(dataset=name, layer='exprs')
+    post_records.append(s)
+    print(f'{name:14s} → {adatas[name].uns["preprocessing"]}')
+
 expression_stats_table(post_records)
 
 # %% [markdown]
-# ### Post-transform distribution — Ki67
+# ## 4. Step 3 — Winsorization (99.9th percentile, per marker)
+#
+# Cap each marker at its 99.9th percentile to suppress antibody-aggregate outliers.
+# Applied **in place** on `layers["exprs"]`. The `max` column should drop while `p99`
+# stays put.
 
 # %%
-marker_distributions(adatas, marker='Ki67', layer='exprs')
+wins_records = []
+for name, _, _ in DATASETS:
+    apply_winsorize(adatas[name], layer='exprs', pct=99.9)
+    s = expression_stats(adatas[name], layer='exprs')
+    s.update(dataset=name, layer='exprs (winsorized)')
+    wins_records.append(s)
+
+expression_stats_table(wins_records)
+
+# %% [markdown]
+# ## 5. Step 4 — 0–1 Normalization (per marker)
+#
+# Per-marker min-max scaling of the winsorized `exprs` → `layers["exprs_norm"]`, the final
+# modeling layer. All markers in all datasets now share the `[0, 1]` range.
+
+# %%
+norm_records = []
+for name, _, _ in DATASETS:
+    apply_minmax(adatas[name], layer='exprs', target_layer='exprs_norm')
+    s = expression_stats(adatas[name], layer='exprs_norm')
+    s.update(dataset=name, layer='exprs_norm')
+    norm_records.append(s)
+
+expression_stats_table(norm_records)
+
+# %% [markdown]
+# ## 6. Processed distributions — shared markers (POST)
+#
+# Same per-dataset grids as section 1b, now on the final `exprs_norm` layer. Distributions
+# should be on a common `[0, 1]` scale with comparable shapes across platforms — the visual
+# confirmation that preprocessing harmonized the datasets.
+
+# %%
+for name, _, _ in DATASETS:
+    plot_marker_distributions(adatas[name], layer='exprs_norm', markers=SHARED, color="#2e7d32")
+
+# %% [markdown]
+# ### 6a. Single-marker cross-dataset check — Ki67
+#
+# Ki67 side-by-side across datasets, raw `X` vs final `exprs_norm`.
+
+# %%
+marker_distributions(adatas, marker='Ki67', layer=None)
+marker_distributions(adatas, marker='Ki67', layer='exprs_norm')
+
+# %% [markdown]
+# ## 7. Final provenance summary
+
+# %%
+for name, _, _ in DATASETS:
+    a = adatas[name]
+    print(f'{name:14s} layers={list(a.layers.keys())}\n'
+          f'{"":14s} preprocessing={a.uns["preprocessing"]}\n')
+
+# %% [markdown]
+# ## 8. (Plan only) Pre/Post Joint UMAP — raw vs processed
+#
+# A strong visual check of batch harmonization is a joint UMAP of all datasets, on the
+# **shared markers** as features, colored by dataset — computed once on raw `X` and once on
+# `exprs_norm`. If preprocessing works, raw should show dataset-driven separation that
+# `exprs_norm` substantially mixes.
+#
+# **Not implemented here** — >1.6M cells make a naive UMAP costly. Efficient recipe to run
+# separately:
+#
+# 1. **Subsample** stratified by dataset — e.g. `sc.pp.subsample(a, n_obs=25_000)` per
+#    dataset (~100k total), so each contributes comparably regardless of size.
+# 2. **Restrict to shared markers**, resolving canonical→raw per dataset, and build one
+#    concatenated `AnnData` (`ad.concat([...], join='inner', label='dataset')`).
+# 3. **Two feature matrices** from the same cells:
+#    - *raw*: `X` shared-marker columns, z-scored per marker (so raw scale differences
+#      don't trivially dominate — the fair "before" baseline).
+#    - *processed*: `exprs_norm` shared-marker columns.
+# 4. **Embed each**: `sc.pp.pca(n_comps=20)` → `sc.pp.neighbors()` → `sc.tl.umap()`.
+# 5. **Plot side by side**: `sc.pl.umap(color='dataset')` for raw vs processed.
+# 6. **Cost control**: cache the subsampled concat to disk; PCA on ~100k × ~12 markers is
+#    seconds. Optionally quantify mixing with a kBET / iLISI score rather than eyeballing.
+#
+# This belongs in its own notebook/script (joint embedding + Harmony) once the cofactor and
+# winsorization choices here are locked.

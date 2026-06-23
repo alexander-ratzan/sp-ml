@@ -7,12 +7,15 @@ ML workflows for spatial proteomics data. Raw datasets live outside the repo in 
 
 All datasets are loaded as `.h5ad` from `../data/<dataset>/`.
 
+Marker counts are biological panel size after dropping technical/elemental channels and harmonizing aliases.
+
 | Dataset | Technology | Disease | Cells | Markers | Samples |
 |---|---|---|---|---|---|
 | Keren et al. 2018 | MIBI-TOF | TNBC | 173,205 | 36 | 34 |
-| Schürch et al. 2020 | CODEX | CRC | 258,385 | 58 | 70 |
-| Patwa et al. 2021 | MIBI | TNBC | 190,240 | 44 | 38 |
-| Jackson & Fischer et al. 2020 | IMC | Breast Cancer | 1,240,267 | 45 | 723 |
+| Schürch et al. 2020 | CODEX | CRC | 258,385 | 57 | 70 |
+| Patwa et al. 2021 | MIBI | TNBC | 190,240 | 36 | 38 |
+| Jackson & Fischer et al. 2020 | IMC | Breast Cancer | 1,240,267 | 37 | 723 |
+| **Total** | | | **1,862,097** | | **865** |
 
 
 ## Structure

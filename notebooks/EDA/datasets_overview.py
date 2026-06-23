@@ -36,6 +36,7 @@ import numpy as np
 
 from data.EDA import (
     KEREN_CFG, SCHURCH_CFG, PATWA_CFG, JACKSON_CFG,
+    JACKSON_ZURICH_CFG, JACKSON_BASEL_CFG,
     dataset_stats, overview_table,
     normalize_panel, normalize_celltypes, panel_heatmap,
 )
@@ -51,7 +52,9 @@ DATASETS = [
 stats, panels, celltypes = [], {}, {}
 for name, path, cfg in DATASETS:
     adata = ad.read_h5ad(path, backed="r")
-    stats.append(dataset_stats(adata, cfg))
+    s = dataset_stats(adata, cfg)
+    s["publication"] = name
+    stats.append(s)
     panels[name] = normalize_panel(adata.var_names)
     col = cfg.get("celltype_col")
     if col and col in adata.obs.columns:
@@ -82,34 +85,39 @@ panel_heatmap(panels)
 panel_heatmap(celltypes, title="Cell Type Coverage")
 
 # %% [markdown]
-# ## Jackson-Fischer Effective Panel by Cohort
+# ## Jackson-Fischer Cohort Breakdown
 #
-# The Jackson-Fischer h5ad objects share a common 45-marker schema, but the Basel and
-# Zurich cohorts were acquired with different panels — markers not measured in a cohort
-# are NaN-filled. The top "Protein Panel Coverage" heatmap reports the full Jackson
-# schema (the **union** of both cohorts) and so hides this. Below, the *effective* panel
-# is the set of markers actually measured (not all-NaN in `layers["exprs"]`) per cohort.
-# Basel lacks EpCAM, CTNNB (β-catenin), and SOX9. Union = measured in either cohort
-# (matches the full object); intersection = measured in both (the safe panel for any
-# combined cross-cohort analysis).
+# The Jackson-Fischer full object (used in modeling) is the union of two independently
+# acquired cohorts. Basel and Zurich share a common 45-marker schema, but Basel did not
+# measure EpCAM, β-catenin (CTNNB1), or SOX9 — those columns are NaN-filled in the
+# merged object. Marker counts below reflect the effective measured panel per cohort.
 
 # %%
 def _effective_panel(path):
+    """Biological markers actually measured — drops technical channels and NaN-only columns."""
     a = ad.read_h5ad(path)
-    L = a.layers["exprs"]
+    L = a.layers["exprs"] if "exprs" in a.layers else a.X
     L = (L.toarray() if hasattr(L, "toarray") else np.asarray(L)).astype("float32")
     measured = [v for v, allnan in zip(a.var_names, np.isnan(L).all(axis=0)) if not allnan]
     return normalize_panel(measured)
 
-_basel  = _effective_panel("../../../data/jacksonfischer2020/basel/basel.h5ad")
-_zurich = _effective_panel("../../../data/jacksonfischer2020/zurich/zurich.h5ad")
-jackson_panels = {
-    "Jackson Basel":              _basel,
-    "Jackson Zurich":             _zurich,
-    "Jackson Union (full)":       _basel | _zurich,
-    "Jackson Intersection":       _basel & _zurich,
-}
-print(f"Union (full): {len(_basel | _zurich)} markers   "
-      f"Intersection: {len(_basel & _zurich)} markers   "
-      f"Zurich-only: {sorted(_zurich - _basel)}")
-panel_heatmap(jackson_panels, title="Jackson-Fischer Effective Panel by Cohort")
+JACKSON_COHORTS = [
+    ("Jackson — Basel",  "../../../data/jacksonfischer2020/basel/basel.h5ad",  JACKSON_BASEL_CFG),
+    ("Jackson — Zurich", "../../../data/jacksonfischer2020/zurich/zurich.h5ad", JACKSON_ZURICH_CFG),
+    ("Jackson — Full",   "../../../data/jacksonfischer2020/full/full.h5ad",    JACKSON_CFG),
+]
+
+jackson_stats = []
+jackson_panels = {}
+for name, path, cfg in JACKSON_COHORTS:
+    adata = ad.read_h5ad(path, backed="r")
+    s = dataset_stats(adata, cfg)
+    s["publication"] = name
+    adata.file.close()
+    ep = _effective_panel(path)
+    s["n_markers"] = len(ep)
+    jackson_stats.append(s)
+    jackson_panels[name] = ep
+
+overview_table(jackson_stats)
+panel_heatmap(jackson_panels, title="Jackson-Fischer Panel Coverage by Cohort")
