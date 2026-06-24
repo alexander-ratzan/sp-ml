@@ -20,7 +20,7 @@
 # acquired by Imaging Mass Cytometry (IMC).
 #
 # Zurich cohort: 72 patients, 104,919 cells, 45 IMC markers.
-Expression matrix: raw ion counts in X, arcsinh-transformed in layers["exprs"].
+# Expression matrix: raw ion counts in X, arcsinh-transformed in layers["exprs"].
 
 # %%
 # %load_ext autoreload
@@ -44,7 +44,8 @@ import squidpy as sq
 from data.EDA import (
     JACKSON_CFG, TECHNICAL_MARKERS, FS,
     summarize_metadata, spatial_info, cat_breakdown,
-    plot_marker_distributions,
+    plot_marker_distributions, prune_and_eval_graph, order_markers,
+    representative_samples, marker_cycle_gif,
 )
 
 CFG = JACKSON_CFG
@@ -121,45 +122,77 @@ plot_all_samples(adata, color_by="tumor_clinical_type", n_cols=8, s=1, cfg=CFG)
 # %% [markdown]
 # ## Analysis Setup — squidpy & scanpy
 
+# %%
+def _layer_stats(M, name):
+    M = M.toarray() if hasattr(M, "toarray") else np.asarray(M)
+    v = M[~np.isnan(M)]
+    print(f"=== {name} global stats ===")
+    print(f"  shape:         {M.shape}")
+    print(f"  range:         [{v.min():.4f}, {v.max():.4f}]")
+    print(f"  mean / median: {v.mean():.4f} / {np.median(v):.4f}")
+    print(f"  pct NaN:       {np.isnan(M).mean() * 100:.1f}%")
+
+
 # %% [markdown]
-# ### `.X` Evaluation
+# ### Raw `.X` Evaluation
 #
-# Jackson `.X` contains raw IMC ion counts with 4.5% NaN — do not use for analysis.
-# `layers["exprs"]` holds arcsinh-transformed values (0 – 8.96, same NaN pattern) and
-# is the most processed source available. Ruthenium bead channels (Ru96–Ru104) are
-# purely technical and excluded below.
+# Jackson `.X` contains raw IMC ion counts with NaN where markers were unmeasured in a
+# cohort. Ruthenium bead channels (Ru96–Ru104) are purely technical and excluded below.
+# Shown as the baseline before our normalization.
 
 # %%
-# Build a concrete copy whose .X is the densified exprs layer, restricted to
-# biological markers. All scanpy calls below then operate on the same dense
-# arcsinh matrix (no layer= needed) — avoids sparse/raw-.X mismatch in dendrograms.
 _bio_vars = [v for v in adata.var_names if v not in TECHNICAL_MARKERS]
 adata_bio = adata[:, _bio_vars].copy()
-_L = adata_bio.layers["exprs"]
-adata_bio.X = (_L.toarray() if hasattr(_L, "toarray") else np.asarray(_L)).astype(np.float32)
-# Drop markers that are entirely NaN (not measured in this cohort, e.g. Basel: EpCAM/CTNNB/SOX9)
-_allnan = np.isnan(adata_bio.X).all(axis=0)
-if _allnan.any():
-    print(f"Dropping all-NaN markers: {list(adata_bio.var_names[_allnan])}")
-    adata_bio = adata_bio[:, ~_allnan].copy()
 adata_bio.uns["dataset"] = DATASET_LABEL
-print(f"Biological markers: {adata_bio.n_vars} / {adata.n_vars} total  (excluded {adata.n_vars - adata_bio.n_vars}: Ru channels + all-NaN)")
+print(f"Biological markers: {adata_bio.n_vars} / {adata.n_vars} total  (excluded {adata.n_vars - adata_bio.n_vars} Ru channels)")
 
 # %%
 plot_marker_distributions(adata_bio)
 
 # %%
-E = adata_bio.X
-print("=== exprs stats (biological markers only) ===")
-print(f"  range:         [{np.nanmin(E):.4f}, {np.nanmax(E):.4f}]")
-print(f"  mean / median: {np.nanmean(E):.4f} / {np.nanmedian(E):.4f}")
-print(f"  pct NaN:       {np.isnan(E).mean() * 100:.1f}%")
+_layer_stats(adata_bio.X, ".X (raw IMC counts, biological markers)")
+
+# %% [markdown]
+# ### Normalized `exprs_norm` Evaluation
+#
+# `exprs_norm` is the final Risom-pipeline layer persisted in the `.h5ad` (Jackson's
+# publisher `exprs` arcsinh c=1 → winsorize 99.9 → per-marker 0–1). Every marker now lives
+# on a common `[0, 1]` scale — the form used for all downstream analysis.
+#
+# > **Note (PCA):** `exprs_norm` is min-max `[0, 1]`, **not** z-scored. Markers with broader
+# > spread carry more weight in PCA; apply `sc.pp.scale` on top for the embedding step only
+# > if equal per-marker weighting is wanted.
+
+# %%
+plot_marker_distributions(adata_bio, layer="exprs_norm")
+
+# %%
+_layer_stats(adata_bio.layers["exprs_norm"], "exprs_norm (biological markers)")
+
+# %% [markdown]
+# ### Switch analysis layer → `exprs_norm`
+#
+# Densify `exprs_norm` into `.X` so all scanpy/squidpy calls below operate on it (raw `X`
+# remains recoverable from disk). All-NaN markers (cohort-unmeasured — Basel:
+# EpCAM/CTNNB/SOX9; none in Zurich) are **dropped by default** so sc/sq calls don't choke on NaN.
+
+# %%
+_E = adata_bio.layers["exprs_norm"]
+_E = (_E.toarray() if hasattr(_E, "toarray") else np.asarray(_E)).astype(np.float32)
+_measured = ~np.isnan(_E).all(axis=0)
+if (~_measured).any():
+    print(f"Dropping {(~_measured).sum()} all-NaN marker(s): {list(adata_bio.var_names[~_measured])}")
+adata_bio = adata_bio[:, _measured].copy()
+adata_bio.X = _E[:, _measured]
+# canonical functional ordering → all downstream plots inherit it
+adata_bio = adata_bio[:, order_markers(list(adata_bio.var_names))].copy()
+print(f"Analysis layer set to exprs_norm — {adata_bio.n_vars} markers, {adata_bio.n_obs} cells.")
 
 # %% [markdown]
 # ### Cell type x marker profiles (scanpy)
 #
 # `cell_metacluster` holds phenograph cluster IDs (not named cell types).
-# adata_bio.X is the arcsinh exprs matrix.
+# All views below run on `exprs_norm` (via `.X`).
 
 # %%
 sc.pl.dotplot(
@@ -193,6 +226,102 @@ _ax.set_xticklabels(_corr.columns, rotation=90, fontsize=FS["sm"])
 _ax.set_yticks(range(len(_corr.index)))
 _ax.set_yticklabels(_corr.index, fontsize=FS["sm"])
 _fig.colorbar(_im, ax=_ax, fraction=0.03, pad=0.02)
-_ax.set_title(f"{DATASET_LABEL} — marker x marker correlation (exprs layer, no aggregation)", fontsize=FS["md"])
+_ax.set_title(f"{DATASET_LABEL} — marker x marker correlation (exprs_norm, no aggregation)", fontsize=FS["md"])
 plt.tight_layout()
 plt.show()
+
+# %% [markdown]
+# ## Spatial Graph Construction — Delaunay vs KNN
+#
+# Build two graphs using the biologically-motivated defaults
+# (see `context_packages/datasets_overview.md`):
+# - **Delaunay** — parameter-free physical adjacency (~6 neighbors, adaptive)
+# - **KNN k=10** — fixed-size window (Schürch cellular-neighborhood method)
+#
+# `library_key=CFG["sample_col"]` (image_name) is essential: it builds the graph *within*
+# each image, never connecting cells across images. Built on `adata_bio` (the `exprs_norm`
+# analysis object).
+
+# %%
+# Drop cells with no cluster label — cell_metacluster has NA in IMC data, and squidpy's
+# nhood_enrichment requires a clean categorical. No-op for fully-labeled datasets.
+adata_bio = adata_bio[adata_bio.obs["cell_metacluster"].notna()].copy()
+adata_bio.obs["cell_metacluster"] = adata_bio.obs["cell_metacluster"].cat.remove_unused_categories()
+
+# KNN needs > KNN_K cells per library; drop samples too small to graph (Jackson has tiny
+# images — no-op for datasets with large samples). Also protects Delaunay from degenerate FOVs.
+KNN_K = 10
+_sizes = adata_bio.obs[CFG["sample_col"]].value_counts()
+_small = _sizes.index[_sizes <= KNN_K]
+if len(_small):
+    print(f"Dropping {len(_small)} sample(s) with <= {KNN_K} cells (too small to graph)")
+    adata_bio = adata_bio[~adata_bio.obs[CFG["sample_col"]].isin(_small)].copy()
+adata_bio.obs[CFG["sample_col"]] = adata_bio.obs[CFG["sample_col"]].astype("category").cat.remove_unused_categories()
+
+sq.gr.spatial_neighbors(adata_bio, library_key=CFG["sample_col"], coord_type="generic",
+                        delaunay=True, key_added="delaunay")
+sq.gr.spatial_neighbors(adata_bio, library_key=CFG["sample_col"], coord_type="generic",
+                        n_neighs=KNN_K, key_added="knn")
+print("obsp keys:", [k for k in adata_bio.obsp])
+
+# %% [markdown]
+# ### Prune + evaluate (single reproducible call)
+#
+# `prune_and_eval_graph` estimates the cell pitch (median per-cell shortest edge), prunes
+# Delaunay edges beyond `factor`× pitch, writes `obsp["delaunay_pruned_connectivities"]`,
+# and auto-plots degree + edge-length distributions (Delaunay pre/post-prune, KNN). µm scale
+# comes from `cfg["um_per_px"]` (Jackson = 1.0).
+
+# %%
+prune_and_eval_graph(adata_bio, cfg=CFG, factor=2.5)
+
+# %% [markdown]
+# ### Graph overlay on tissue (squidpy)
+#
+# Edges over one image, cells colored by phenograph metacluster — Delaunay's adaptive mesh
+# vs KNN's fixed-degree connectivity.
+
+# %%
+_one = adata_bio[adata_bio.obs["image_name"] == sample].copy()
+fig, axes = plt.subplots(1, 2, figsize=(22, 11), dpi=150, facecolor="white")
+sq.pl.spatial_scatter(_one, shape=None, color="cell_metacluster",
+                      connectivity_key="delaunay_pruned_connectivities",
+                      edges_width=0.3, edges_color="#888888",
+                      size=40, ax=axes[0], title="Delaunay (pruned)")
+sq.pl.spatial_scatter(_one, shape=None, color="cell_metacluster",
+                      connectivity_key="knn_connectivities",
+                      edges_width=0.3, edges_color="#888888",
+                      size=40, ax=axes[1], title="KNN (k=10)")
+plt.tight_layout()
+plt.show()
+
+# %% [markdown]
+# ### Neighborhood enrichment (squidpy)
+#
+# Which metaclusters co-localize beyond chance, using the pruned Delaunay graph. Red =
+# enriched adjacency; blue = avoidance.
+
+# %%
+sq.gr.nhood_enrichment(adata_bio, cluster_key="cell_metacluster",
+                       connectivity_key="delaunay_pruned", seed=0)
+sq.pl.nhood_enrichment(adata_bio, cluster_key="cell_metacluster", figsize=(9, 9))
+
+# %% [markdown]
+# ## Marker Cycle GIF — expression on the graph, by category
+#
+# One representative sample per `tumor_clinical_type` (largest), side by side as graphs (pruned Delaunay
+# edges as a static backdrop), cycling markers in canonical functional order. Each frame's
+# colormap is set by the marker's functional group; the title shows the marker and its
+# category. Headless-friendly: frames render via Agg and stitch to a GIF on disk.
+
+# %%
+from pathlib import Path as _Path
+from IPython.display import Image as _Image
+
+_reps, _titles = representative_samples(adata_bio, cfg=CFG, by="tumor_clinical_type")
+_Path("figures").mkdir(exist_ok=True)
+_gif = marker_cycle_gif(
+    adata_bio, _reps, cfg=CFG, layer="exprs_norm",
+    titles=_titles, fps=2, out_path="figures/jacksonfischer2020_zurich_marker_cycle.gif",
+)
+_Image(filename=_gif)
