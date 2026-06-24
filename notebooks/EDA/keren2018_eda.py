@@ -14,10 +14,10 @@
 # ---
 
 # %% [markdown]
-# # Keren 2018 — TNBC MIBI-TOF EDA
+# # Keren 2018 — TNBC MIBI EDA
 #
 # Exploratory data analysis of the Keren et al. 2018 triple-negative breast cancer (TNBC) dataset,
-# acquired by multiplexed ion beam imaging (MIBI-TOF).
+# acquired by multiplexed ion beam imaging (MIBI).
 #
 # 34 patients, 173,205 cells, 36 protein markers.
 
@@ -41,10 +41,13 @@ import scanpy as sc
 import squidpy as sq
 
 from data.EDA import (
+    KEREN_CFG,
     summarize_metadata, spatial_info, cat_breakdown,
     plot_all_samples,
     plot_marker_distributions,
-    register_cmap,
+    prune_and_eval_graph,
+    representative_samples, marker_cycle_gif,
+    register_cmap, order_markers,
     KEREN_CELLTYPE_CMAP, FS,
 )
 
@@ -111,31 +114,74 @@ plt.show()
 # %%
 plot_all_samples(adata, color_by="all_group_name", n_cols=6)
 
+# %%
+def _layer_stats(M, name):
+    M = M.toarray() if hasattr(M, "toarray") else np.asarray(M)
+    v = M[~np.isnan(M)]
+    print(f"=== {name} global stats ===")
+    print(f"  shape:         {M.shape}")
+    print(f"  range:         [{v.min():.4f}, {v.max():.4f}]")
+    print(f"  mean / median: {v.mean():.4f} / {np.median(v):.4f}")
+    print(f"  pct zero:      {(v == 0).mean() * 100:.1f}%")
+    print(f"  pct NaN:       {np.isnan(M).mean() * 100:.1f}%")
+
+
 # %% [markdown]
-# ### `.X` Evaluation
+# ### Raw `.X` Evaluation
 #
-# Determine the normalization state of `.X` before running any downstream analysis.
+# Keren `.X` is already arcsinh-transformed by the Nolan-lab MIBI pipeline
+# (background-subtracted, so values can be negative). This is the publisher's processed
+# form — shown here as the baseline before our normalization.
 
 # %%
 adata.uns["dataset"] = "Keren 2018"
 plot_marker_distributions(adata)
 
 # %%
-X = adata.X
 print("=== .X identity check ===")
-print(f"X == obsm[X_data]:  {np.allclose(X, adata.obsm['X_data'])}")
-print()
-print("=== .X global stats ===")
-print(f"  dtype:         {X.dtype}")
-print(f"  range:         [{X.min():.4f}, {X.max():.4f}]")
-print(f"  mean / median: {X.mean():.4f} / {np.median(X):.4f}")
-print(f"  pct negative:  {(X < 0).mean() * 100:.1f}%")
+print(f"X == obsm[X_data]:  {np.allclose(adata.X, adata.obsm['X_data'])}\n")
+_layer_stats(adata.X, ".X (Nolan arcsinh)")
+
+# %% [markdown]
+# ### Normalized `exprs_norm` Evaluation
+#
+# `exprs_norm` is the final Risom-pipeline layer persisted in the `.h5ad` (Keren's `X` is
+# already arcsinh, so the pipeline just winsorizes 99.9 → per-marker 0–1). Every marker now
+# lives on a common `[0, 1]` scale — the form used for all downstream analysis.
+#
+# > **Note (PCA):** `exprs_norm` is min-max `[0, 1]`, **not** z-scored. Markers with broader
+# > spread carry more weight in PCA; apply `sc.pp.scale` on top for the embedding step only
+# > if equal per-marker weighting is wanted.
+
+# %%
+plot_marker_distributions(adata, layer="exprs_norm")
+
+# %%
+_layer_stats(adata.layers["exprs_norm"], "exprs_norm")
+
+# %% [markdown]
+# ### Switch analysis layer → `exprs_norm`
+#
+# Set `.X` to the normalized layer so all scanpy/squidpy calls below operate on it (raw
+# `X` remains recoverable from disk). All-NaN markers (cohort-unmeasured; none here) are
+# dropped by default.
+
+# %%
+_measured = ~np.all(np.isnan(adata.layers["exprs_norm"]), axis=0)
+if (~_measured).any():
+    print(f"Dropping {(~_measured).sum()} all-NaN marker(s): {list(adata.var_names[~_measured])}")
+adata = adata[:, _measured].copy()
+adata.X = adata.layers["exprs_norm"].copy()
+# canonical functional ordering → all downstream plots (dotplot/matrixplot/corr) inherit it
+adata = adata[:, order_markers(list(adata.var_names))].copy()
+print(f"Analysis layer set to exprs_norm — {adata.n_vars} markers, {adata.n_obs} cells.")
 
 # %% [markdown]
 # ### Cell type × marker profiles (scanpy)
 #
-# Dotplot shows mean expression (dot color) and fraction of cells expressing (dot size) per cell type.
-# `standard_scale="var"` rescales each marker 0–1 across cell types so the pattern across types is visible despite the differing absolute scales of arcsinh-transformed markers.
+# All views below now run on `exprs_norm` (via `.X`). Dotplot shows mean expression (dot
+# color) and fraction of cells expressing (dot size) per cell type. `standard_scale="var"`
+# rescales each marker 0–1 across cell types so the pattern across types stays visible.
 
 # %%
 sc.pl.dotplot(
@@ -169,7 +215,7 @@ _ax.set_xticklabels(_corr.columns, rotation=90, fontsize=FS["sm"])
 _ax.set_yticks(range(len(_corr.index)))
 _ax.set_yticklabels(_corr.index, fontsize=FS["sm"])
 _fig.colorbar(_im, ax=_ax, fraction=0.03, pad=0.02)
-_ax.set_title("Keren 2018 — marker × marker correlation (all cells, no aggregation)", fontsize=FS["md"])
+_ax.set_title("Keren 2018 — marker × marker correlation (exprs_norm, all cells, no aggregation)", fontsize=FS["md"])
 plt.tight_layout()
 plt.show()
 
@@ -194,82 +240,16 @@ sq.gr.spatial_neighbors(adata, library_key="SampleID", coord_type="generic",
 print("obsp keys:", [k for k in adata.obsp])
 
 # %% [markdown]
-# ### Degree distribution — adaptive vs fixed
+# ### Prune + evaluate (single reproducible call)
 #
-# Delaunay degree varies with local geometry (~6 mean, fewer at tissue edges, more in
-# dense regions) — it reflects actual physical adjacency. KNN is fixed: every cell has
-# exactly 10 outgoing edges by construction, so its degree distribution is a single spike.
+# `prune_and_eval_graph` estimates the cell pitch (median per-cell shortest edge), prunes
+# Delaunay edges beyond `factor`× pitch, writes `obsp["delaunay_pruned_connectivities"]`,
+# and auto-plots degree + edge-length distributions across three columns: Delaunay
+# pre-prune, Delaunay post-prune, and KNN (for the adaptive-vs-fixed comparison). µm scale
+# comes from `cfg["um_per_px"]`. Reproduce on any dataset by passing its CFG.
 
 # %%
-deg_del = np.asarray((adata.obsp["delaunay_connectivities"] > 0).sum(axis=1)).ravel()
-deg_knn = np.asarray((adata.obsp["knn_connectivities"] > 0).sum(axis=1)).ravel()
-
-fig, axes = plt.subplots(1, 2, figsize=(16, 5), dpi=120, facecolor="white")
-for ax, deg, name, color in [(axes[0], deg_del, "Delaunay", "steelblue"),
-                             (axes[1], deg_knn, "KNN (k=10)", "indianred")]:
-    ax.hist(deg, bins=range(0, int(deg.max()) + 2), color=color, alpha=0.85, align="left")
-    ax.axvline(deg.mean(), color="black", ls="--", lw=1.2)
-    ax.set_title(f"{name} — degree  (mean {deg.mean():.1f})", fontsize=FS["md"])
-    ax.set_xlabel("neighbors per cell", fontsize=FS["sm"])
-    ax.set_ylabel("cells", fontsize=FS["sm"])
-    ax.tick_params(labelsize=FS["xs"])
-plt.suptitle("Degree distribution: adaptive (Delaunay) vs fixed (KNN)", fontsize=FS["lg"], y=1.02)
-plt.tight_layout()
-plt.show()
-
-# %% [markdown]
-# ### Edge-length distribution (µm)
-#
-# Edge lengths converted to microns (Keren: 0.39 µm/pixel). Delaunay shows a long right
-# tail — the spurious cross-gap / convex-hull edges that pruning targets. KNN's lengths
-# are bounded by the local 10th-neighbor distance.
-
-# %%
-UM_PER_PX = 0.39
-dist_del = adata.obsp["delaunay_distances"].data * UM_PER_PX
-dist_knn = adata.obsp["knn_distances"].data * UM_PER_PX
-
-fig, axes = plt.subplots(1, 2, figsize=(16, 5), dpi=120, facecolor="white")
-for ax, d, name, color in [(axes[0], dist_del, "Delaunay", "steelblue"),
-                           (axes[1], dist_knn, "KNN (k=10)", "indianred")]:
-    ax.hist(d, bins=80, range=(0, np.percentile(d, 99)), color=color, alpha=0.85, linewidth=0)
-    ax.axvline(np.median(d), color="black", ls="--", lw=1.2, label=f"median {np.median(d):.1f} µm")
-    ax.set_title(f"{name} — edge length", fontsize=FS["md"])
-    ax.set_xlabel("edge length (µm)", fontsize=FS["sm"])
-    ax.set_ylabel("edges", fontsize=FS["sm"])
-    ax.legend(fontsize=FS["sm"])
-    ax.tick_params(labelsize=FS["xs"])
-plt.suptitle("Edge-length distribution (µm)", fontsize=FS["lg"], y=1.02)
-plt.tight_layout()
-plt.show()
-
-# %% [markdown]
-# ### Pruning Delaunay long edges
-#
-# Drop edges beyond ~2.5× the median nearest-neighbor spacing (estimated per-cell as the
-# shortest Delaunay edge). This removes cross-gap/hull artifacts while keeping true local
-# adjacency. Pruned graph stored in `obsp["delaunay_pruned_connectivities"]`.
-
-# %%
-import scipy.sparse as sp
-
-_D = adata.obsp["delaunay_distances"].tocsr()
-_min_edge = np.array([
-    _D.data[_D.indptr[i]:_D.indptr[i + 1]].min() if _D.indptr[i + 1] > _D.indptr[i] else np.nan
-    for i in range(_D.shape[0])
-])
-nn_px = np.nanmedian(_min_edge)
-thresh_px = 2.5 * nn_px
-frac_pruned = (adata.obsp["delaunay_distances"].data > thresh_px).mean()
-print(f"median NN spacing : {nn_px:.1f} px  ({nn_px * UM_PER_PX:.1f} µm)")
-print(f"prune threshold   : {thresh_px:.1f} px  ({thresh_px * UM_PER_PX:.1f} µm)")
-print(f"edges pruned      : {frac_pruned * 100:.2f}%")
-
-_keep = adata.obsp["delaunay_distances"].copy()
-_keep.data = (_keep.data <= thresh_px).astype(np.float64)
-adata.obsp["delaunay_pruned_connectivities"] = sp.csr_matrix(
-    adata.obsp["delaunay_connectivities"].multiply(_keep)
-)
+prune_and_eval_graph(adata, cfg=KEREN_CFG, factor=2.5)
 
 # %% [markdown]
 # ### Graph overlay on tissue (squidpy)
@@ -302,3 +282,24 @@ plt.show()
 sq.gr.nhood_enrichment(adata, cluster_key="all_group_name",
                        connectivity_key="delaunay_pruned", seed=0)
 sq.pl.nhood_enrichment(adata, cluster_key="all_group_name", figsize=(9, 9))
+
+# %% [markdown]
+# ## Marker Cycle GIF — expression on the graph, by category
+#
+# One representative sample per `subtype` (the largest), shown side by side as graphs (pruned
+# Delaunay edges as a static backdrop), cycling identically through every marker on the shared
+# `exprs_norm` 0–1 scale. Lets you scan how each marker's spatial pattern differs across
+# categories with structure held constant. Headless-friendly: frames render via Agg and stitch
+# to a GIF written to disk, displayed inline below.
+
+# %%
+from pathlib import Path as _Path
+from IPython.display import Image as _Image
+
+_reps, _titles = representative_samples(adata, cfg=KEREN_CFG, by="subtype")
+_Path("figures").mkdir(exist_ok=True)
+_gif = marker_cycle_gif(
+    adata, _reps, cfg=KEREN_CFG, layer="exprs_norm",
+    titles=_titles, fps=2, out_path="figures/keren_marker_cycle.gif",
+)
+_Image(filename=_gif)
