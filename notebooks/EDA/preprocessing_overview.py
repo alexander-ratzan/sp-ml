@@ -100,7 +100,7 @@ print(f'\n{len(SHARED)} shared markers across all datasets:\n{SHARED}')
 #
 # | Dataset | Tech | `X` state | Step 1 (size norm) | Step 2 (arcsinh) | Steps 3–4 |
 # |---|---|---|---|---|---|
-# | Keren 2018 | MIBI-TOF | arcsinh (Nolan pipeline) | — already done | copy `X` → `exprs` | ✓ winsorize + 0–1 |
+# | Keren 2018 | MIBI | arcsinh (Nolan pipeline) | — already done | copy `X` → `exprs` | ✓ winsorize + 0–1 |
 # | Schurch 2020 | CODEX | raw counts | ✓ `X / size` | `arcsinh(./0.5)` | ✓ winsorize + 0–1 |
 # | Patwa 2021 | MIBI | per-pixel (area-norm upstream) | — done upstream | `arcsinh(./5)` | ✓ winsorize + 0–1 |
 # | Jackson 2020 | IMC | arcsinh cofactor=1 (`exprs` layer) | — already done | use existing `exprs` | ✓ winsorize + 0–1 |

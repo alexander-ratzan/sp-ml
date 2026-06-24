@@ -174,6 +174,50 @@ def apply_minmax(adata, layer="exprs", target_layer="exprs_norm"):
     adata.layers[target_layer] = (X - lo) / rng
 
 
+def finalize_preprocessing(adata, cfg, winsorize_pct=99.9):
+    """Compute ONLY the final Risom layer `exprs_norm` + complete provenance.
+
+    Runs the full pipeline (size norm → arcsinh → winsorize → 0-1) on a working copy and
+    writes just `layers["exprs_norm"]` (float32) and `uns["preprocessing"]`. X and all
+    existing layers are left untouched — so Jackson's publisher `exprs`/`quant_norm` and
+    Patwa's `positivity` survive, and the intermediate steps (size_norm, clean exprs)
+    are NOT persisted (reproducible by rerunning preprocessing_EDA.ipynb).
+    """
+    cofactor = cfg.get("arcsinh_cofactor")
+    size_col = cfg.get("size_col")
+
+    if "exprs" in adata.layers:                       # Jackson — publisher arcsinh
+        L = adata.layers["exprs"]
+        M = (L.toarray() if sp.issparse(L) else np.asarray(L, dtype=float)).astype(float)
+        prov = {"exprs_source": "pre-existing arcsinh (publisher)",
+                "size_norm": False, "arcsinh_cofactor": None}
+    elif cofactor is not None:                        # Schurch / Patwa — raw or per-pixel
+        X = adata.X.toarray() if sp.issparse(adata.X) else np.asarray(adata.X, dtype=float)
+        X = X.astype(float)
+        if size_col and size_col in adata.obs:
+            X = X / adata.obs[size_col].to_numpy(dtype=float)[:, None]
+            src, sn = f"X / {size_col} → arcsinh", True
+        else:
+            src, sn = "X → arcsinh", False
+        M = np.arcsinh(X / cofactor)
+        prov = {"exprs_source": src, "size_norm": sn,
+                "size_col": size_col if sn else None, "arcsinh_cofactor": cofactor}
+    else:                                             # Keren — X already arcsinh
+        M = adata.X.toarray() if sp.issparse(adata.X) else np.asarray(adata.X, dtype=float).copy()
+        prov = {"exprs_source": "X (pre-transformed)", "size_norm": False, "arcsinh_cofactor": None}
+
+    caps = np.nanpercentile(M, winsorize_pct, axis=0)
+    M = np.minimum(M, caps)
+    lo = np.nanmin(M, axis=0)
+    hi = np.nanmax(M, axis=0)
+    rng = np.where(hi > lo, hi - lo, 1.0)
+    adata.layers["exprs_norm"] = ((M - lo) / rng).astype("float32")
+
+    prov.update(winsorize_pct=winsorize_pct, norm="minmax_01",
+                final_layer="exprs_norm", pipeline="Risom2026")
+    adata.uns["preprocessing"] = prov
+
+
 def prepare_exprs(adata, cfg):
     """Bring adata to the common variance-stabilized checkpoint: layers['exprs'].
 

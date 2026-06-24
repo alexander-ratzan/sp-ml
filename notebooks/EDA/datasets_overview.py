@@ -18,6 +18,14 @@
 #
 # Attribute summary for all spatial proteomics datasets used in this project.
 # All numbers are derived live from the dataset objects.
+#
+# **Patients** = unique patients in the loaded data.
+#
+# **TNBC overlap:** Keren and Patwa profile the *same patients and the same MIBI images*
+# (Patwa re-analyzes Keren's cohort). The **Total** row is the naive sum across all four
+# datasets; the **Unique Total** row counts the TNBC cohort once — using Patwa as the
+# representative (superset) and excluding Keren — so it is the correct distinct count.
+# Patwa is the primary TNBC dataset; Keren is retained as an out-of-distribution validation set.
 
 # %%
 # %load_ext autoreload
@@ -43,10 +51,10 @@ from data.EDA import (
 
 # %%
 DATASETS = [
-    ("Keren 2018",   "../../../data/keren2018/tnbc.h5ad",               KEREN_CFG),
-    ("Schurch 2020", "../../../data/schurch2020/crc.h5ad",              SCHURCH_CFG),
-    ("Patwa 2021",   "../../../data/rasp-mibi/tnbc_mibi.h5ad",          PATWA_CFG),
-    ("Jackson 2020", "../../../data/jacksonfischer2020/full/full.h5ad", JACKSON_CFG),
+    ("TNBC (Keren 2018)",                     "../../../data/keren2018/tnbc.h5ad",               KEREN_CFG),
+    ("CRC (Schürch 2020)",                    "../../../data/schurch2020/crc.h5ad",              SCHURCH_CFG),
+    ("TNBC (Patwa 2021)",                     "../../../data/rasp-mibi/tnbc_mibi.h5ad",          PATWA_CFG),
+    ("Breast Cancer (Jackson & Fischer 2020)","../../../data/jacksonfischer2020/full/full.h5ad", JACKSON_CFG),
 ]
 
 stats, panels, celltypes = [], {}, {}
@@ -62,7 +70,9 @@ for name, path, cfg in DATASETS:
     adata.file.close()
 
 # %%
-overview_table(stats)
+# Keren ⊂ Patwa (same patients/images) → "Unique Total" counts the TNBC cohort once,
+# using Patwa as the representative and excluding Keren from the sums.
+overview_table(stats, unique_exclude=["TNBC (Keren 2018)"])
 
 # %% [markdown]
 # ## Protein Panel Coverage
