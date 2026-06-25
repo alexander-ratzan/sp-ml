@@ -45,7 +45,7 @@ from data.EDA import (
     JACKSON_CFG, TECHNICAL_MARKERS, FS,
     summarize_metadata, spatial_info, cat_breakdown,
     plot_marker_distributions, prune_and_eval_graph, order_markers,
-    representative_samples, marker_cycle_gif,
+    representative_samples, marker_cycle_gif, graph_celltype_panels,
 )
 
 CFG = JACKSON_CFG
@@ -305,6 +305,17 @@ plt.show()
 sq.gr.nhood_enrichment(adata_bio, cluster_key="cell_metacluster",
                        connectivity_key="delaunay_pruned", seed=0)
 sq.pl.nhood_enrichment(adata_bio, cluster_key="cell_metacluster", figsize=(9, 9))
+
+# %% [markdown]
+# ## Cell-Type Graph Panels — representative samples
+#
+# Static companion to the marker-cycle GIF below: the pruned Delaunay graph for one
+# representative sample per tumor_clinical_type, cells colored by cell metacluster (same
+# coloring convention as the spatial plots above). The legend renders as its own figure.
+
+# %%
+_reps, _titles = representative_samples(adata_bio, cfg=CFG, by="tumor_clinical_type")
+graph_celltype_panels(adata_bio, _reps, cfg=CFG, color_by="cell_metacluster", titles=_titles)
 
 # %% [markdown]
 # ## Marker Cycle GIF — expression on the graph, by category

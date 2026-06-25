@@ -798,16 +798,27 @@ def prune_and_eval_graph(adata, cfg=KEREN_CFG, factor=2.5,
     return thresh_px
 
 
-def representative_samples(adata, cfg=KEREN_CFG, by=None):
-    """Pick one representative sample per category: the sample with the most cells in it.
-    Returns (sample_ids, titles) where titles maps sample_id -> 'category: sample_id'."""
+def representative_samples(adata, cfg=KEREN_CFG, by=None, method="median"):
+    """Pick one representative sample per category by per-sample cell count.
+
+    `method="median"` (default) picks the sample whose cell count is nearest the
+    category's median count — a typically-sized slice; `method="max"` picks the largest
+    sample (most cells). Returns (sample_ids, titles) where titles maps
+    sample_id -> 'category: sample_id'.
+    """
+    if method not in {"median", "max"}:
+        raise ValueError(f"method must be 'median' or 'max', got {method!r}")
     sample_col = cfg["sample_col"]
     by = by or cfg["label_col"]
     reps, titles = [], {}
     for cat, grp in adata.obs.groupby(by, observed=True):
         if str(cat).lower() in {"nan", "na", "none", ""}:
             continue
-        sid = grp[sample_col].value_counts().idxmax()
+        counts = grp[sample_col].value_counts()
+        if method == "max":
+            sid = counts.idxmax()
+        else:
+            sid = (counts - counts.median()).abs().idxmin()  # nearest the median count
         reps.append(sid)
         titles[sid] = f"{cat}: {sid}"
     return reps, titles
@@ -903,6 +914,59 @@ def marker_cycle_gif(adata, sample_ids, cfg=KEREN_CFG, layer="exprs_norm", marke
     plt.close(fig)
     print(f"wrote {out_path}  ({len(markers)} frames, {n} panels)")
     return out_path
+
+
+def graph_celltype_panels(adata, sample_ids, cfg=KEREN_CFG, color_by=None,
+                          conn_key="delaunay_pruned_connectivities", titles=None,
+                          s=8, dpi=110, edge_color="#888888", edge_lw=0.4,
+                          legend_ncol=1):
+    """Static paired panels of the (pruned Delaunay) graph per sample, cells colored by
+    category — the non-animated companion to `marker_cycle_gif`. Panels reuse the GIF's
+    1×N scaffold (``figsize=(6 * n, 6)``, equal aspect) so the slices render at the same
+    size and aspect, with the pruned-graph edges drawn *under* small cell points so the
+    mesh stays visible. `color_by` defaults to the dataset cell-type column
+    (``cfg["celltype_col"]``); colors follow the same convention as the other spatial plots
+    via `_resolve_color_map` (pinned cmap if defined, else auto tab20). The cell-type
+    legend is rendered as a separate standalone figure over the full colormap. Shows both
+    figures inline; returns None.
+    """
+    from matplotlib.collections import LineCollection
+
+    sample_col = cfg["sample_col"]
+    color_by   = color_by or cfg["celltype_col"]
+    color_map  = _resolve_color_map(color_by, adata, cfg) or _build_color_map(adata.obs[color_by])
+    n          = len(sample_ids)
+
+    fig, axes = plt.subplots(1, n, figsize=(6 * n, 6.0), dpi=dpi, facecolor="white",
+                             squeeze=False)
+    axes = axes.ravel()
+    for ax, sid in zip(axes, sample_ids):
+        sub = adata[adata.obs[sample_col] == sid]
+        xy  = sub.obsm["spatial"] if "spatial" in sub.obsm else sub.obs[["x", "y"]].values
+        ax.set_aspect("equal"); ax.axis("off"); ax.margins(0)
+        if conn_key and conn_key in sub.obsp:
+            A = sub.obsp[conn_key].tocoo()
+            m = A.row < A.col  # undirected: one segment per edge
+            segs = np.stack([xy[A.row[m]], xy[A.col[m]]], axis=1)
+            ax.add_collection(LineCollection(segs, colors=edge_color, linewidths=edge_lw,
+                                             zorder=1))
+        # small points on top of the mesh so edges remain visible
+        _cat_scatter(ax, xy[:, 0], xy[:, 1], sub.obs[color_by], color_map=color_map, s=s)
+        ax.collections[-1].set_zorder(2)
+        ax.set_title(titles.get(sid, str(sid)) if titles else str(sid), fontsize=FS["md"], pad=3)
+    fig.subplots_adjust(left=0.01, right=0.99, top=0.95, bottom=0.02, wspace=0.04)
+    plt.show()
+
+    # cell-type legend as its own standalone figure (axes-based so it renders reliably),
+    # over the full colormap
+    handles = _make_legend_handles(color_map)
+    rows = int(np.ceil(len(handles) / legend_ncol))
+    lfig, lax = plt.subplots(figsize=(3.2 * legend_ncol, max(1.5, 0.32 * rows)), dpi=dpi,
+                             facecolor="white")
+    lax.axis("off")
+    lax.legend(handles=handles, loc="center", ncol=legend_ncol, frameon=False,
+               fontsize=FS["sm"], title=color_by, title_fontsize=FS["md"])
+    plt.show()
 
 
 # ── Single sample ─────────────────────────────────────────────────────────────

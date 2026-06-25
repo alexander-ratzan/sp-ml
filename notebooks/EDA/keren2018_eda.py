@@ -46,7 +46,7 @@ from data.EDA import (
     plot_all_samples,
     plot_marker_distributions,
     prune_and_eval_graph,
-    representative_samples, marker_cycle_gif,
+    representative_samples, marker_cycle_gif, graph_celltype_panels,
     register_cmap, order_markers,
     KEREN_CELLTYPE_CMAP, FS,
 )
@@ -282,6 +282,17 @@ plt.show()
 sq.gr.nhood_enrichment(adata, cluster_key="all_group_name",
                        connectivity_key="delaunay_pruned", seed=0)
 sq.pl.nhood_enrichment(adata, cluster_key="all_group_name", figsize=(9, 9))
+
+# %% [markdown]
+# ## Cell-Type Graph Panels — representative samples
+#
+# Static companion to the marker-cycle GIF below: the pruned Delaunay graph for one
+# representative sample per subtype, cells colored by cell type (same coloring convention
+# as the spatial plots above). The cell-type legend renders as its own figure.
+
+# %%
+_reps, _titles = representative_samples(adata, cfg=KEREN_CFG, by="subtype")
+graph_celltype_panels(adata, _reps, cfg=KEREN_CFG, titles=_titles)
 
 # %% [markdown]
 # ## Marker Cycle GIF — expression on the graph, by category
