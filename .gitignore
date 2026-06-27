@@ -38,3 +38,4 @@ Thumbs.db
 # Agent ref schematics and images
 context_packages/
 figures/
+!context_packages/repo_spec_v3.md

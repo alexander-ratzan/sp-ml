@@ -396,6 +396,8 @@ SCHURCH_CFG = dict(
     cat_cols=[
         "Region", "patients", "tma_ab", "tma_12", "groups", "group_name",
         "cell_type", "neighborhood_name", "neighborhood_id", "neighborhood10",
+        # patient-level clinical phenotypes (merged from crc_metadata.xlsx)
+        "sex", "pT", "pN", "p_TNM", "MSI_IHC", "MLH1", "PMS2", "MSH6", "MSH2",
     ],
     pinned_cmaps={
         "neighborhood_name": SCHURCH_NEIGHBORHOOD_CMAP,

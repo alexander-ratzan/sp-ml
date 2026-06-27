@@ -82,6 +82,16 @@ spatial_info(adata)
 cat_breakdown(adata, cfg=CFG)
 
 # %% [markdown]
+# ### `tumor_clinical_type` — clinical subtypes
+#
+# The primary label for this dataset. Subtypes are defined by hormone-receptor (HR = ER/PR) and HER2 status:
+#
+# 1. **HR+ HER2+** — express both hormone receptors and HER2.
+# 2. **HR+ HER2-** — express hormone receptors but lack HER2 amplification.
+# 3. **HR- HER2+** — lack hormone receptors but express HER2.
+# 4. **Triple-Negative (TNBC / HR- HER2-)** — lack appreciable ER, PR, and HER2 expression; particularly known for high-risk clinical outcomes.
+
+# %% [markdown]
 # ## Single Sample Viewer
 
 # %%

@@ -110,7 +110,7 @@ plt.show()
 # All 70 TMA cores.
 
 # %%
-plot_all_samples(adata, color_by="neighborhood_name", n_cols=7, s=1, cfg=CFG)
+plot_all_samples(adata, color_by="neighborhood_name", n_cols=7, s=4, cfg=CFG)
 
 # %% [markdown]
 # ## Analysis Setup — squidpy & scanpy
@@ -300,7 +300,12 @@ sq.pl.nhood_enrichment(adata, cluster_key="cell_type", figsize=(9, 9))
 # convention as the spatial plots above). The cell-type legend renders as its own figure.
 
 # %%
-_reps, _titles = representative_samples(adata, cfg=CFG, by="group_name")
+import importlib, data.EDA as eda
+importlib.reload(eda)
+from data.EDA import representative_samples, graph_celltype_panels   # rebind the names
+
+# %%
+_reps, _titles = representative_samples(adata, cfg=CFG, by="group_name", method="median")
 graph_celltype_panels(adata, _reps, cfg=CFG, titles=_titles)
 
 # %% [markdown]
@@ -322,3 +327,5 @@ _gif = marker_cycle_gif(
     titles=_titles, fps=2, out_path="figures/schurch2020_marker_cycle.gif",
 )
 _Image(filename=_gif)
+
+# %%

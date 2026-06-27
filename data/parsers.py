@@ -35,6 +35,25 @@ _RENAME_OBS = {
 }
 
 
+# Patient-level clinical/survival fields from crc_metadata.xlsx Sheet A → obs names.
+# Survival drives the overall-survival secondary task; the rest are covariates.
+# OS/DFS in months; *_Censor: 1 = event (OS death / DFS recurrence), 0 = censored
+# (validated against group prognosis — CLR 4/17 deaths vs DII 13/18).
+_SCHURCH_META_SHEET = "A. Patient_data_TMA_annotations"
+_SCHURCH_META_COLS = {
+    "OS": "OS", "OS_Censor": "OS_Censor",
+    "DFS": "DFS", "DFS_Censor": "DFS_Censor",
+    "Sex": "sex", "Age": "age",
+    "pT": "pT", "pN": "pN", "p_TNM": "p_TNM", "G": "tumor_grade",
+    "MSI_IHC": "MSI_IHC", "MSI_PCR": "MSI_PCR",
+    "MLH1": "MLH1", "PMS2": "PMS2", "MSH6": "MSH6", "MSH2": "MSH2",
+}
+# Categorical fields; coerced via nullable string so Excel's mixed int/str levels
+# (e.g. pT "3"/"1c") serialize cleanly. tumor_grade + MSI_PCR stay numeric.
+_SCHURCH_META_CAT = ["sex", "pT", "pN", "p_TNM",
+                     "MSI_IHC", "MLH1", "PMS2", "MSH6", "MSH2"]
+
+
 def _is_protein_col(col: str) -> bool:
     """True if column is a protein/marker expression column (Name:Cyc_X_ch_Y pattern)."""
     return bool(re.search(r":Cyc_\d+_ch_\d+$", col)) or col == "HOECHST1:Cyc_1_ch_1"
@@ -53,7 +72,7 @@ def _parse_var_name(col: str) -> dict:
             "cycle": None, "channel": None}
 
 
-def parse_schurch2020(csv_path: str) -> ad.AnnData:
+def parse_schurch2020(csv_path: str, metadata_path: str = None) -> ad.AnnData:
     """
     Parse Schurch et al. 2020 CRC CODEX CSV into an AnnData object.
 
@@ -61,12 +80,19 @@ def parse_schurch2020(csv_path: str) -> ad.AnnData:
     ----------
     csv_path : str
         Path to CRC_clusters_neighborhoods_markers.csv
+    metadata_path : str, optional
+        Path to crc_metadata.xlsx (Supplementary Table S1). If omitted, looks for
+        ``crc_metadata.xlsx`` alongside ``csv_path``. When found, per-patient
+        survival + clinical fields (Sheet A) are broadcast cell→patient onto obs
+        (join on ``patients``, verified 1:1). Skipped silently if absent.
 
     Returns
     -------
     AnnData
         X         : float32 expression matrix (cells × proteins)
-        obs       : cell metadata (Region is the per-slice identifier)
+        obs       : cell metadata (Region is the per-slice identifier; plus
+                    patient-level OS/DFS survival + clinical covariates when
+                    metadata is available — see ``_SCHURCH_META_COLS``)
         var       : protein metadata (var_name, full_name, cycle, channel)
         obsm      : 'spatial' = (x, y) coordinates
     """
@@ -103,6 +129,21 @@ def parse_schurch2020(csv_path: str) -> ad.AnnData:
     # Group labels (Schurch 2020: 1 = CLR, 2 = DII)
     _GROUP_NAMES = {1: "CLR", 2: "DII"}
     obs["group_name"] = obs["groups"].astype(int).map(_GROUP_NAMES).astype("category")
+
+    # ── Patient-level clinical + survival metadata (Supp. Table S1, Sheet A) ──
+    if metadata_path is None:
+        cand = os.path.join(os.path.dirname(csv_path), "crc_metadata.xlsx")
+        metadata_path = cand if os.path.exists(cand) else None
+    if metadata_path and os.path.exists(metadata_path):
+        meta = pd.read_excel(metadata_path, sheet_name=_SCHURCH_META_SHEET)
+        meta = meta[meta["Patient"].notna()].copy()
+        meta["Patient"] = meta["Patient"].astype(int)
+        meta = meta.set_index("Patient")
+        pid = obs["patients"].astype(int).to_numpy()         # 1:1 join, verified
+        for src, dst in _SCHURCH_META_COLS.items():
+            obs[dst] = meta[src].reindex(pid).to_numpy()
+        for col in _SCHURCH_META_CAT:
+            obs[col] = obs[col].astype("string").astype("category")
 
     # Rename x/y into obs for EDA compat
     obs["x"] = df["X:X"].values.astype(np.float32)
