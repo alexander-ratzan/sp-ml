@@ -1,0 +1,2 @@
+# POC pool: mean over cells → one vector per sample-graph.
+_target_: sp_ml.models.pool.MeanPool

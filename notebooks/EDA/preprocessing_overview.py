@@ -49,7 +49,7 @@
 
 import sys
 from pathlib import Path
-_r = next(p for p in [Path().resolve(), *Path().resolve().parents] if (p / 'data').is_dir() and (p / 'notebooks').is_dir())
+_r = next(p for p in [Path().resolve(), *Path().resolve().parents] if (p / 'sp_ml').is_dir() and (p / 'notebooks').is_dir())
 if str(_r) not in sys.path: sys.path.insert(0, str(_r))
 
 import numpy as np
@@ -58,10 +58,10 @@ import scipy.sparse as sp
 import anndata as ad
 from IPython.display import display
 
-from data.EDA import (
+from sp_ml.data.EDA import (
     KEREN_CFG, SCHURCH_CFG, PATWA_CFG, JACKSON_CFG, shared_markers,
 )
-from data.preprocessing import (
+from sp_ml.data.preprocessing import (
     expression_stats, expression_stats_table, marker_distributions,
     plot_marker_distributions, prepare_exprs,
     apply_size_norm, apply_arcsinh, apply_winsorize, apply_minmax,

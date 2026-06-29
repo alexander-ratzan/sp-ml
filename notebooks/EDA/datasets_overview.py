@@ -36,13 +36,13 @@ warnings.filterwarnings("ignore")
 
 import sys
 from pathlib import Path
-_r = next(p for p in [Path().resolve(), *Path().resolve().parents] if (p / "data").is_dir() and (p / "notebooks").is_dir())
+_r = next(p for p in [Path().resolve(), *Path().resolve().parents] if (p / "sp_ml").is_dir() and (p / "notebooks").is_dir())
 if str(_r) not in sys.path: sys.path.insert(0, str(_r))
 
 import anndata as ad
 import numpy as np
 
-from data.EDA import (
+from sp_ml.data.EDA import (
     KEREN_CFG, SCHURCH_CFG, PATWA_CFG, JACKSON_CFG,
     JACKSON_ZURICH_CFG, JACKSON_BASEL_CFG,
     dataset_stats, overview_table,

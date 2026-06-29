@@ -1,0 +1,7 @@
+# Repeated Nested Stratified Group K-Fold — outer 3:1:1 patient split.
+# Headline protocol; (repeat, fold) are swept in --multirun. Checkpoint 0 uses one cell.
+n_folds: 5
+n_repeats: 10
+fold: 0
+repeat: 0
+seed: ${seed}

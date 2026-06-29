@@ -1,0 +1,2 @@
+# Post-hoc evaluation defaults (sp_ml/eval/). Placeholder for Checkpoint 0.
+save_confusion_matrix: true

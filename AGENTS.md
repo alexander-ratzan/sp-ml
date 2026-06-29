@@ -4,31 +4,38 @@ Internal ledger for AI agents and collaborators. Keep lean.
 
 ## Repo purpose
 
-Spatial proteomics ML research. Phase 1 = data ingestion and EDA across four published datasets. Phase 2 = feature engineering and model development (not started).
+Spatial proteomics ML research. Phase 1 = data ingestion and EDA across four published datasets. Phase 2 = feature engineering and model development (in progress — see `context_packages/repo_spec_v3.md`).
 
 ## File conventions
 
-- `models/` — training and model development
+- `sp_ml/` — the editable-installed Python package; all modeling code lives here. Built (Checkpoint 0): `data/`, `models/`, `train/`, `configs.py` (schemas) + `conf/` (experiment surface). Pending (S7+): `run.py` (Hydra entrypoint), `eval/` (post-hoc). Architecture + rationale: `context_packages/repo_spec_v3.md`.
+- `pyproject.toml` — package metadata + deps; torch pinned to the **cu128** build (see file note; default PyPI wheel is cu130 and won't see a 12.8-driver GPU).
 - `context_packages/` - images, figures, schematic references for task execution. only interface with when referred to.
   - `context_packages/datasets_overview.md` — **authoritative dataset reference.** Per-dataset AnnData structure, preprocessing state, panel harmonization, and **spatial resolution + biologically-motivated graph-construction defaults** (µm/pixel, paper graph params, empirical NN spacing, recommended squidpy `spatial_neighbors` settings). Read before any cross-dataset or graph/neighborhood work.
-- `data/` - data parsers, loaders, preprocessing, EDA, and viz
-- `data/parsers.py` — raw format → AnnData. One `parse_<dataset><year>()` function per dataset. Currently `parse_schurch2020`, `parse_patwa2021` (Keren loads a downloaded `.h5ad`; Jackson is built by `../data/jacksonfischer2020/scripts/`). `parse_schurch2020` also merges per-patient survival + clinical metadata from a sibling `crc_metadata.xlsx` (Supp. Table S1, Sheet A) — survival `OS`/`DFS`(+censors), `sex`/`age`, staging, MMR/MSI — broadcast cell→patient (`_SCHURCH_META_COLS`).
-- `data/preprocessing.py` — expression diagnostics + the Risom 2026 pipeline. Diagnostics (`expression_stats`, `expression_stats_table`, `marker_distributions`, `plot_marker_distributions`); steps (`apply_size_norm`, `apply_arcsinh`, `apply_winsorize`, `apply_minmax`); `prepare_exprs` (→ variance-stabilized `exprs` checkpoint) and `finalize_preprocessing` (→ persists final `exprs_norm` layer + `adata.uns["preprocessing"]` provenance). `X` stays raw; `exprs_norm` is the modeling input.
-- `data/EDA.py` — AnnData analysis and visualization. Holds per-dataset configs (`*_CFG`, incl. `sample_col`, `um_per_px`, `size_col`/`arcsinh_cofactor`), reference color maps (`*_CMAP`), font scale (`FS`), metadata summaries (`summarize_metadata`, `spatial_info`, `cat_breakdown`), spatial plots (`plot_sample/samples/all_samples`, `plot_marker_distributions`), `register_cmap`, panel/cell-type harmonization (`normalize_panel`, `shared_markers`, `normalize_celltypes`, `panel_heatmap` + alias/exclude tables), marker functional categories + canonical plotting order (`MARKER_CATEGORY_ORDER`, `MARKER_CATEGORIES`, `order_markers` — alias-aware ordering applied as the default across all marker plots; reorder `adata[:, order_markers(...)]` once so dotplot/matrixplot/corr inherit it), cross-dataset overview (`dataset_stats`, `overview_table`), spatial graph build+eval (`prune_and_eval_graph`), marker-cycle GIF (`representative_samples`, `marker_cycle_gif`), and its static companion `graph_celltype_panels` (pruned-Delaunay graph per representative sample, cells colored by the dataset cell-type column, cell-type legend as a separate figure).
+- `sp_ml/data/` - data parsers, loaders, preprocessing, EDA, viz, and the modeling DataModule
+- `sp_ml/data/datamodule.py` — `SpatialGraphDataModule` + `build_sample_graphs`: AnnData → one PyG `Data` per `sample_col` (bag-of-cells, **no edges yet**); `y` from the task config, `patient`/`sample_id` carried for patient-grouped CV + patient-level scoring. Spatial-graph edges + `InMemoryDataset` cache are deferred to the first graph layer (post-Checkpoint-0).
+- `sp_ml/data/crossval.py` — `make_holdout_split` + `HoldoutSplit`: patient-grouped, label-stratified single 3:1:1 train/val/test split (nested `StratifiedGroupKFold`), deterministic in `(seed, repeat, fold)`. The DataModule consumes a split via `split.apply(graphs)`; assign it as `dm.split = HoldoutSplit(...)` **after** `instantiate` (Hydra converts a dataclass kwarg into a DictConfig and strips its methods). Full repeated-nested protocol + `splits.json` artifact deferred to CV scale-out.
+- `sp_ml/models/` — pure architecture (`nn.Module`, no Lightning). `encoder.py` (`Identity`), `graph.py` (`NoGraph`), `pool.py` (`MeanPool`), `readout.py` (`LogReg`), `model.py` (`SpModel`). Every component: `__init__(in_dim, …)` + `out_dim`; `_target_` leaves in `conf/model/{encoder,graph,pool,readout}/` select them. New architecture = one ~4-line component + one leaf.
+- `sp_ml/train/` — Lightning wrappers. `litbase.py` (`LitBase`: optimizer/scheduler from Hydra partials, over `requires_grad` params only). `classifier.py` (`LitClassifier`: CrossEntropy + torchmetrics; `aggregate_by_patient` = eval-only mean-softmax patient rollup; `class_weights` = train-fold inverse freq). `_target_: sp_ml.train.LitClassifier` in `conf/train/supervised.yaml`. Metrics live in the wrapper (one path, no train/eval skew).
+- `sp_ml/data/parsers.py` — raw format → AnnData. One `parse_<dataset><year>()` function per dataset. Currently `parse_schurch2020`, `parse_patwa2021` (Keren loads a downloaded `.h5ad`; Jackson is built by `../data/jacksonfischer2020/scripts/`). `parse_schurch2020` also merges per-patient survival + clinical metadata from a sibling `crc_metadata.xlsx` (Supp. Table S1, Sheet A) — survival `OS`/`DFS`(+censors), `sex`/`age`, staging, MMR/MSI — broadcast cell→patient (`_SCHURCH_META_COLS`).
+- `sp_ml/data/preprocessing.py` — expression diagnostics + the Risom 2026 pipeline. Diagnostics (`expression_stats`, `expression_stats_table`, `marker_distributions`, `plot_marker_distributions`); steps (`apply_size_norm`, `apply_arcsinh`, `apply_winsorize`, `apply_minmax`); `prepare_exprs` (→ variance-stabilized `exprs` checkpoint) and `finalize_preprocessing` (→ persists final `exprs_norm` layer + `adata.uns["preprocessing"]` provenance). `X` stays raw; `exprs_norm` is the modeling input.
+- `sp_ml/data/EDA.py` — AnnData analysis and visualization. Holds per-dataset configs (`*_CFG`, incl. `sample_col`, `um_per_px`, `size_col`/`arcsinh_cofactor`), reference color maps (`*_CMAP`), font scale (`FS`), metadata summaries (`summarize_metadata`, `spatial_info`, `cat_breakdown`), spatial plots (`plot_sample/samples/all_samples`, `plot_marker_distributions`), `register_cmap`, panel/cell-type harmonization (`normalize_panel`, `shared_markers`, `normalize_celltypes`, `panel_heatmap` + alias/exclude tables), marker functional categories + canonical plotting order (`MARKER_CATEGORY_ORDER`, `MARKER_CATEGORIES`, `order_markers` — alias-aware ordering applied as the default across all marker plots; reorder `adata[:, order_markers(...)]` once so dotplot/matrixplot/corr inherit it), cross-dataset overview (`dataset_stats`, `overview_table`), spatial graph build+eval (`prune_and_eval_graph`), marker-cycle GIF (`representative_samples`, `marker_cycle_gif`), and its static companion `graph_celltype_panels` (pruned-Delaunay graph per representative sample, cells colored by the dataset cell-type column, cell-type legend as a separate figure).
 
 - `notebooks/` - experimental notebook directory and data viz
 - `notebooks/EDA/` — per-dataset cohort notebooks (cell order: imports → load `.h5ad` → metadata summary → spatial viz → raw `.X` vs `exprs_norm` eval → switch `.X`=`exprs_norm` (drops all-NaN markers) → scanpy profiles → graph construction: `spatial_neighbors` Delaunay+KNN with `library_key=CFG["sample_col"]` → `prune_and_eval_graph` → `nhood_enrichment`) plus cross-dataset notebooks (`datasets_overview`, `preprocessing_EDA`).
 
 ## Import pattern
 
-Notebooks resolve the repo root dynamically (no hardcoded `sys.path.insert`):
+The package is **editable-installed** (`uv pip install -e . --no-deps`), so notebooks and code
+import it directly:
 
 ```python
-from pathlib import Path
-_r = next(p for p in [Path().resolve(), *Path().resolve().parents]
-          if (p / "data").is_dir() and (p / "notebooks").is_dir())
-if str(_r) not in sys.path: sys.path.insert(0, str(_r))
+from sp_ml.data.EDA import SCHURCH_CFG, shared_markers      # etc.
+from sp_ml.data.preprocessing import prepare_exprs
 ```
+
+Existing EDA notebooks keep a belt-and-suspenders root-finder (now keyed on `sp_ml/`), redundant
+given the install.
 
 ## Completed milestones
 
@@ -40,3 +47,5 @@ if str(_r) not in sys.path: sys.path.insert(0, str(_r))
 - [x] EDA notebooks — Keren, Schürch, Patwa, Jackson & Fischer (full + Basel + Zurich cohorts), datasets overview, preprocessing EDA
 - [x] Dynamic repo-root sys.path in all notebooks
 - [x] EDA notebooks switch analysis layer to `exprs_norm` + spatial graph construction (Delaunay/KNN → prune → neighborhood enrichment) via `prune_and_eval_graph`
+- [x] Phase 2 — Checkpoint 0 (S0–S6): Hydra + Lightning + PyG spine. `pyproject` (cu128) · `sp_ml/` package · `configs.py` + `conf/` · `data/{datamodule,crossval}.py` · `models/` · `train/`. POC `notebooks/poc/bag_of_cells.ipynb` trains a mean-pool bag-of-cells logreg on Schürch · clr_dii end-to-end (single split, loss ↓, patient-level metrics). **Per-stage status, gates, and design rationale live in `context_packages/repo_spec_v3.md` (S0–S9 build table) — the detailed ledger; do not duplicate here.**
+- [ ] Phase 2 — Checkpoint 0 remainder (S7–S9): `run.py` (Hydra entrypoint + W&B + GPU preflight), `scripts/poc.sbatch`, `tests/` smoke

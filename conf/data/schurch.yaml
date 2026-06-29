@@ -1,0 +1,9 @@
+defaults:
+  - base_data        # DataCfg schema (struct validation)
+  - _self_
+
+name: schurch
+h5ad_path: ${paths.data}/schurch2020/crc.h5ad
+sample_col: Region       # one PyG graph per Region (tissue sample)
+patient_col: patients    # CV groups by patient
+# target column comes from the task config (task.source[schurch]), not here

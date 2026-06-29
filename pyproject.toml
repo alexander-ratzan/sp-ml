@@ -1,0 +1,34 @@
+[project]
+name = "sp-ml"
+version = "0.0.0"
+description = "Spatial proteomics ML — hierarchical attention for tissue phenotype prediction (Project 4)."
+requires-python = ">=3.12"
+dependencies = [
+    # framework
+    "torch",            # MUST be the cu128 build — see note below
+    "torch-geometric",  # pure-python; compiled extensions (scatter/sparse) deferred to graph stage
+    "lightning",
+    "torchmetrics",
+    "hydra-core",
+    "wandb",
+    # scientific stack (shared with the EDA env)
+    "anndata",
+    "scanpy",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+]
+
+# torch is pinned to the CUDA 12.8 build to match the Converge A10G driver (570.x / CUDA 12.8):
+#   uv pip install torch --index-url https://download.pytorch.org/whl/cu128
+# The default PyPI wheel is cu130 and will NOT see the GPU on this driver
+# (alternative: `ml cuda-compat/13` to forward-enable cu13). Install the package with
+#   uv pip install -e . --no-deps
+# so this pin is never overwritten by a transitive resolve.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["sp_ml*"]

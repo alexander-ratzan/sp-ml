@@ -1,0 +1,2 @@
+# POC graph: no interaction layer (bag-of-cells ignores edge_index).
+_target_: sp_ml.models.graph.NoGraph

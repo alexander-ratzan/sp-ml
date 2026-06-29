@@ -31,7 +31,7 @@ warnings.filterwarnings("ignore")
 
 import sys
 from pathlib import Path
-_r = next(p for p in [Path().resolve(), *Path().resolve().parents] if (p / "data").is_dir() and (p / "notebooks").is_dir())
+_r = next(p for p in [Path().resolve(), *Path().resolve().parents] if (p / "sp_ml").is_dir() and (p / "notebooks").is_dir())
 if str(_r) not in sys.path: sys.path.insert(0, str(_r))
 
 import anndata as ad
@@ -41,7 +41,7 @@ import matplotlib.pyplot as plt
 import scanpy as sc
 import squidpy as sq
 
-from data.EDA import (
+from sp_ml.data.EDA import (
     JACKSON_CFG, TECHNICAL_MARKERS, FS,
     summarize_metadata, spatial_info, cat_breakdown,
     plot_marker_distributions, prune_and_eval_graph, order_markers,
@@ -115,7 +115,7 @@ plt.show()
 # All 72 images.
 
 # %%
-from data.EDA import plot_all_samples
+from sp_ml.data.EDA import plot_all_samples
 plot_all_samples(adata, color_by="tumor_clinical_type", n_cols=8, s=1, cfg=CFG)
 
 

@@ -1,0 +1,20 @@
+# Root config. The defaults list selects the baseline — which IS the POC model
+# (identity encoder · no graph · mean pool · logreg readout on Schürch / clr_dii).
+defaults:
+  - data: schurch
+  - task: clr_dii
+  - model/encoder: identity
+  - model/graph: none
+  - model/pool: mean
+  - model/readout: logreg
+  - train: supervised
+  - cv: nested
+  - eval: default
+  - _self_
+
+seed: 0
+
+paths:
+  data: ${oc.env:SP_DATA_DIR,../data}      # datasets live one level above the repo
+
+output_dir: ${hydra:runtime.output_dir}    # Hydra stamps per-run; no manual plumbing

@@ -1,0 +1,2 @@
+# POC encoder: pass-through (out_dim == in_dim). in_dim injected at instantiate.
+_target_: sp_ml.models.encoder.Identity

@@ -1,0 +1,2 @@
+# POC readout: linear classification head (logreg). num_classes injected at instantiate.
+_target_: sp_ml.models.readout.LogReg

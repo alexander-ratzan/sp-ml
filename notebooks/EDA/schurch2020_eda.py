@@ -30,7 +30,7 @@ warnings.filterwarnings("ignore")
 
 import sys
 from pathlib import Path
-_r = next(p for p in [Path().resolve(), *Path().resolve().parents] if (p / "data").is_dir() and (p / "notebooks").is_dir())
+_r = next(p for p in [Path().resolve(), *Path().resolve().parents] if (p / "sp_ml").is_dir() and (p / "notebooks").is_dir())
 if str(_r) not in sys.path: sys.path.insert(0, str(_r))
 
 import anndata as ad
@@ -40,7 +40,7 @@ import matplotlib.pyplot as plt
 import scanpy as sc
 import squidpy as sq
 
-from data.EDA import (
+from sp_ml.data.EDA import (
     SCHURCH_CFG, SCHURCH_NEIGHBORHOOD_CMAP, FS,
     summarize_metadata, spatial_info, cat_breakdown,
     plot_all_samples, plot_marker_distributions, register_cmap, order_markers,
@@ -302,7 +302,7 @@ sq.pl.nhood_enrichment(adata, cluster_key="cell_type", figsize=(9, 9))
 # %%
 import importlib, data.EDA as eda
 importlib.reload(eda)
-from data.EDA import representative_samples, graph_celltype_panels   # rebind the names
+from sp_ml.data.EDA import representative_samples, graph_celltype_panels   # rebind the names
 
 # %%
 _reps, _titles = representative_samples(adata, cfg=CFG, by="group_name", method="median")

@@ -1,0 +1,8 @@
+defaults:
+  - base_task        # TaskCfg schema (struct validation)
+  - _self_
+
+name: clr_dii
+kind: binary
+classes: [CLR, DII]        # DII = positive class (worse prognosis) → index 1
+source: {schurch: group_name}

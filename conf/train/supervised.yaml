@@ -1,0 +1,13 @@
+# Supervised training contract: wrapper + optimizer (partial) + loss + Trainer.
+litmodule: {_target_: sp_ml.train.LitClassifier}
+optimizer: {_target_: torch.optim.AdamW, _partial_: true, lr: 1e-3, weight_decay: 1e-4}
+loss:      {_target_: torch.nn.CrossEntropyLoss}   # weight= injected per-fold if class_weighted
+class_weighted: true
+
+trainer:
+  _target_: lightning.Trainer
+  max_epochs: 50
+  accelerator: auto        # CPU-runnable POC; GPU picked up automatically when present
+  devices: 1
+  precision: 32-true       # bf16-mixed enabled via override on GPU runs
+  log_every_n_steps: 10

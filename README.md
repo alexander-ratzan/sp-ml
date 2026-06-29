@@ -24,14 +24,18 @@ Marker counts are biological panel size after dropping technical/elemental chann
 
 ```
 sp-ml/
-├── models/                  # training scripts and model weights (Phase 2, empty)
-├── data/
-│   ├── parsers.py           # raw → AnnData parsers (parse_schurch2020, parse_patwa2021)
-│   ├── preprocessing.py     # Risom pipeline: size-norm → arcsinh → winsorize → 0–1 (exprs_norm layer)
-│   └── EDA.py               # summaries, panel/celltype harmonization, spatial viz
+├── pyproject.toml           # package + deps (torch pinned cu128); editable-installed
+├── conf/                    # Hydra config tree — the experiment surface
+├── sp_ml/                   # the Python package (the "meat")
+│   ├── configs.py           # structured config schemas (DataCfg / TaskCfg)
+│   ├── data/                # parsers, preprocessing, EDA/viz + modeling DataModule + crossval
+│   ├── models/              # encoder / graph / pool / readout + SpModel
+│   └── train/               # Lightning wrappers (LitClassifier, patient-level metrics)
+│   # run.py (Hydra entrypoint) + eval/ (post-hoc) are next — see context_packages/repo_spec_v3.md
 ├── notebooks/
-│   └── EDA/                 # per-dataset + cross-dataset exploratory notebooks
-└── context_packages/        # reference images, figures, schematics (.gitignored)
+│   ├── EDA/                 # per-dataset + cross-dataset exploratory notebooks
+│   └── poc/                 # Checkpoint-0 bag-of-cells walkthrough (bag_of_cells.ipynb)
+└── context_packages/        # reference images, figures, schematics, repo spec (.gitignored)
 ```
 
 ## Notebooks
@@ -49,5 +53,13 @@ The shared `.venv` and `requirements.txt` live in the parent workspace dir (one 
 ```bash
 uv venv ../.venv --python 3.12
 source ../.venv/bin/activate
-uv pip install -r ../requirements.txt
+uv pip install -r ../requirements.txt          # EDA / scverse base stack
+
+# ML stack — torch MUST be the cu128 build (matches the Converge A10G driver, CUDA 12.8;
+# the default PyPI wheel is cu130 and will NOT see the GPU on this driver):
+uv pip install torch --index-url https://download.pytorch.org/whl/cu128
+uv pip install torch-geometric lightning torchmetrics hydra-core wandb   # torch already satisfied
+uv pip install -e . --no-deps                  # install the sp_ml package only (preserves cu128 pin)
 ```
+
+Verify the GPU is visible: `python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"`.
