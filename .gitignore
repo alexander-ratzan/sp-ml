@@ -47,3 +47,6 @@ Thumbs.db
 context_packages/
 figures/
 !context_packages/repo_spec_v3.md
+# SLURM logs (keep dir)
+logs/*
+!logs/.gitkeep

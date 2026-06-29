@@ -8,7 +8,7 @@ Spatial proteomics ML research. Phase 1 = data ingestion and EDA across four pub
 
 ## File conventions
 
-- `sp_ml/` — the editable-installed Python package; all modeling code lives here. Built (Checkpoint 0): `data/`, `models/`, `train/`, `configs.py` (schemas) + `conf/` (experiment surface). Pending (S7+): `run.py` (Hydra entrypoint), `eval/` (post-hoc). Architecture + rationale: `context_packages/repo_spec_v3.md`.
+- `sp_ml/` — the editable-installed Python package; all modeling code lives here. Built: `data/`, `models/`, `train/`, `configs.py` (schemas) + `conf/` (experiment surface), `run.py` (Hydra entrypoint: compose → GPU preflight → build → fit → test; W&B offline-default via `cfg.wandb`). Pending: `eval/` (post-hoc). Architecture + rationale: `context_packages/repo_spec_v3.md`.
 - `pyproject.toml` — package metadata + deps; torch pinned to the **cu128** build (see file note; default PyPI wheel is cu130 and won't see a 12.8-driver GPU).
 - `context_packages/` - images, figures, schematic references for task execution. only interface with when referred to.
   - `context_packages/datasets_overview.md` — **authoritative dataset reference.** Per-dataset AnnData structure, preprocessing state, panel harmonization, and **spatial resolution + biologically-motivated graph-construction defaults** (µm/pixel, paper graph params, empirical NN spacing, recommended squidpy `spatial_neighbors` settings). Read before any cross-dataset or graph/neighborhood work.
@@ -48,4 +48,7 @@ given the install.
 - [x] Dynamic repo-root sys.path in all notebooks
 - [x] EDA notebooks switch analysis layer to `exprs_norm` + spatial graph construction (Delaunay/KNN → prune → neighborhood enrichment) via `prune_and_eval_graph`
 - [x] Phase 2 — Checkpoint 0 (S0–S6): Hydra + Lightning + PyG spine. `pyproject` (cu128) · `sp_ml/` package · `configs.py` + `conf/` · `data/{datamodule,crossval}.py` · `models/` · `train/`. POC `notebooks/poc/bag_of_cells.ipynb` trains a mean-pool bag-of-cells logreg on Schürch · clr_dii end-to-end (single split, loss ↓, patient-level metrics). **Per-stage status, gates, and design rationale live in `context_packages/repo_spec_v3.md` (S0–S9 build table) — the detailed ledger; do not duplicate here.**
-- [ ] Phase 2 — Checkpoint 0 remainder (S7–S9): `run.py` (Hydra entrypoint + W&B + GPU preflight), `scripts/poc.sbatch`, `tests/` smoke
+- [x] Phase 2 — S7: `sp_ml/run.py` (`python -m sp_ml.run`) — Hydra entrypoint reproducing Checkpoint 0 from config; GPU preflight (cap vs `get_arch_list`, cuda-compat hint); `cfg.wandb` (offline default, online + auto-entity verified, group derived). W&B offline+online both tested working; entity `alexander-ratzan-new-york-university`.
+- [x] Phase 2 — S8: `scripts/poc.sbatch` — submits the SAME `python -m sp_ml.run` to Converge. **Defaults to CPU `defq`** (`basic` tier = 1 A10G/user → GPU batch blocks `QOSMaxGRESPerUser` while the interactive workspace holds it); GPU via `sbatch -p gpu --gres=gpu:a10g:1 scripts/poc.sbatch`. Validated: completed on `defq`, metrics match notebook/CLI exactly.
+- [x] Phase 2 — S9: `tests/test_smoke.py` — fast pytest on tiny synthetic AnnData (graph build, zero-leakage split, model forward, patient aggregation, class weights). 5 passed.
+- [x] **Checkpoint 0 COMPLETE (S0–S9)** — full Hydra+Lightning+PyG spine: notebook, CLI (`python -m sp_ml.run`), and sbatch all reproduce identical metrics; W&B offline+online tested; smoke tests green.

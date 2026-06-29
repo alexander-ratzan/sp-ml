@@ -18,3 +18,14 @@ paths:
   data: ${oc.env:SP_DATA_DIR,../data}      # datasets live one level above the repo
 
 output_dir: ${hydra:runtime.output_dir}    # Hydra stamps per-run; no manual plumbing
+
+wandb:
+  project: sp-ml
+  entity: null         # null → account default entity (personal `asratzan` can't host runs)
+  mode: offline        # offline | online | disabled  (offline = safe default; sync later)
+  group: null          # null → derived {dataset}-{task}-{model} in run.py
+  name: null
+
+hydra:
+  job:
+    chdir: false       # keep cwd stable so paths.data (../data) resolves
