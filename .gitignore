@@ -27,6 +27,14 @@ env/
 *.tiff
 *.tif
 
+# Run artifacts (Hydra-stamped runs, W&B logs, graph cache, Lightning logs)
+outputs/
+multirun/
+wandb/
+cache/
+lightning_logs/
+*.ckpt
+
 # OS
 .DS_Store
 Thumbs.db
