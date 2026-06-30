@@ -19,6 +19,16 @@ Marker counts are biological panel size after dropping technical/elemental chann
 | Breast Cancer (Jackson & Fischer 2020) | IMC | Breast Cancer | 1,240,267 | 37 | 723 | 285 |
 | **Total (unique)** | | | **1,688,892** | | **831** | **358** |
 
+### Wu et al. 2022 / SPACE-GM — pretraining & discovery tier
+
+Three CODEX cohorts added as a separate tier (native panels kept, **not** reconciled). `X` = publisher z-scores; `exprs_norm` = upper-99.9 winsorize (per-marker) → min-max 0–1. **Region→patient identity is not in the public release for UPMC/DFCI** (region-level only → spatial pretraining / region-level tasks); it resolves for Charville. Built by `sp_ml/data/parse_wu2022.py`; see `context_packages/wu2022_integration_contract.md`.
+
+| Cohort | Disease | Cells | Markers | Regions | Patients |
+|---|---|---|---|---|---|
+| UPMC-HNC | Head & Neck | 2,165,215 | 22 | 308 | region-level |
+| Charville / Stanford-CRC | Colorectal | 632,280 | 40 | 292 | 162 |
+| DFCI-HNC | Head & Neck | 136,680 | 41 | 58 | region-level |
+
 
 ## Structure
 
@@ -45,6 +55,7 @@ sp-ml/
 **Cross-dataset** overview notebooks:
 - `datasets_overview` — harmonized panel/cell-type coverage and a combined stats table across all four datasets.
 - `preprocessing_overview` — the Risom preprocessing pipeline (size-norm → arcsinh → winsorize → 0–1) with per-step diagnostics across datasets.
+- `wu2022_datasets_overview` / `wu2022_preprocessing_overview` — cross-Wu cohort overview + preprocessing (z-score → winsorize → 0–1), and `wu2022_charville_eda` — interactive Stanford-CRC EDA.
 
 ## Setup
 
