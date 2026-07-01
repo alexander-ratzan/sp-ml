@@ -29,3 +29,8 @@ wandb:
 hydra:
   job:
     chdir: false       # keep cwd stable so paths.data (../data) resolves
+  run:
+    dir: outputs/run/${now:%Y-%m-%d}/${now:%H-%M-%S}            # single runs
+  sweep:
+    dir: outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}       # sweeps (no root-level multirun/)
+    subdir: ${hydra.job.num}

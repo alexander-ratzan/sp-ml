@@ -58,6 +58,8 @@ def make_logger(cfg):
     wb = cfg.get("wandb")
     if wb is None or wb.mode == "disabled":
         return False
+    import os
+    os.environ["WANDB_MODE"] = wb.mode      # cfg is authoritative over any inherited env
     group = wb.get("group") or "-".join([
         cfg.data.name, cfg.task.name,
         "-".join(c._target_.split(".")[-1]
@@ -66,6 +68,27 @@ def make_logger(cfg):
     return WandbLogger(project=wb.project, entity=wb.get("entity"),
                        offline=(wb.mode == "offline"), group=group,
                        name=wb.get("name"), save_dir=cfg.output_dir)
+
+
+def _log_predictions(logger, cfg, preds):
+    """Persist patient-level test predictions as a W&B artifact (CSV) → pooled eval read-back."""
+    if preds is None:
+        return
+    import os
+
+    import pandas as pd
+    import wandb
+
+    pats, probs, y = preds
+    df = pd.DataFrame({"patient": pats, "y_true": [int(v) for v in y],
+                       "fold": int(cfg.cv.fold), "repeat": int(cfg.cv.repeat)})
+    for c in range(probs.shape[1]):
+        df[f"prob_{c}"] = probs[:, c].tolist()
+    path = os.path.join(cfg.output_dir, "test_predictions.csv")
+    df.to_csv(path, index=False)
+    art = wandb.Artifact(f"preds-{logger.experiment.id}", type="predictions")
+    art.add_file(path)
+    logger.experiment.log_artifact(art)
 
 
 @hydra.main(config_path="../conf", config_name="config", version_base=None)
@@ -92,6 +115,14 @@ def main(cfg):
                       loss=loss, num_classes=dm.num_classes)
 
     logger = make_logger(cfg)
+    if logger:
+        from omegaconf import OmegaConf
+        npat = lambda idx: len({dm.graphs[i].patient for i in idx})
+        hp = OmegaConf.to_container(cfg, resolve=True)
+        hp["derived"] = {"num_markers": dm.num_markers, "num_classes": dm.num_classes,
+                         "n_train_patients": npat(dm.tr), "n_val_patients": npat(dm.va),
+                         "n_test_patients": npat(dm.te)}
+        logger.log_hyperparams(hp)                       # full config + derived → read-back
     callbacks = [ModelCheckpoint(monitor="val/auroc", mode="max", save_top_k=1)]
     if logger:
         callbacks.append(LearningRateMonitor(logging_interval="epoch"))
@@ -100,6 +131,7 @@ def main(cfg):
     trainer.fit(lit, dm)
     trainer.test(lit, dm)
     if logger:
+        _log_predictions(logger, cfg, lit.test_predictions)
         import wandb
         wandb.finish()
 

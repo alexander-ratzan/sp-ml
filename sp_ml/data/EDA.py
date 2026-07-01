@@ -800,18 +800,19 @@ def prune_and_eval_graph(adata, cfg=KEREN_CFG, factor=2.5,
     return thresh_px
 
 
-def representative_samples(adata, cfg=KEREN_CFG, by=None, method="median"):
+def representative_samples(adata, cfg=KEREN_CFG, by=None, method="median", random_seed=None):
     """Pick one representative sample per category by per-sample cell count.
 
     `method="median"` (default) picks the sample whose cell count is nearest the
     category's median count — a typically-sized slice; `method="max"` picks the largest
-    sample (most cells). Returns (sample_ids, titles) where titles maps
-    sample_id -> 'category: sample_id'.
+    sample (most cells); `method="random"` picks a random sample (optionally using random_seed).
+    Returns (sample_ids, titles) where titles maps sample_id -> 'category: sample_id'.
     """
-    if method not in {"median", "max"}:
-        raise ValueError(f"method must be 'median' or 'max', got {method!r}")
+    if method not in {"median", "max", "random"}:
+        raise ValueError(f"method must be 'median', 'max', or 'random', got {method!r}")
     sample_col = cfg["sample_col"]
     by = by or cfg["label_col"]
+    rng = np.random.default_rng(random_seed) if method == "random" else None
     reps, titles = [], {}
     for cat, grp in adata.obs.groupby(by, observed=True):
         if str(cat).lower() in {"nan", "na", "none", ""}:
@@ -819,6 +820,8 @@ def representative_samples(adata, cfg=KEREN_CFG, by=None, method="median"):
         counts = grp[sample_col].value_counts()
         if method == "max":
             sid = counts.idxmax()
+        elif method == "random":
+            sid = rng.choice(counts.index.values)
         else:
             sid = (counts - counts.median()).abs().idxmin()  # nearest the median count
         reps.append(sid)

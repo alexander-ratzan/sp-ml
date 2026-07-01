@@ -27,9 +27,8 @@ env/
 *.tiff
 *.tif
 
-# Run artifacts (Hydra-stamped runs, W&B logs, graph cache, Lightning logs)
+# Run artifacts — everything runtime nests under outputs/ (Hydra run/multirun + SLURM logs)
 outputs/
-multirun/
 wandb/
 cache/
 lightning_logs/
@@ -46,7 +45,5 @@ Thumbs.db
 # Agent ref schematics and images
 context_packages/
 figures/
+outputs/
 !context_packages/repo_spec_v3.md
-# SLURM logs (keep dir)
-logs/*
-!logs/.gitkeep

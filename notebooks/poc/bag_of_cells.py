@@ -159,26 +159,57 @@ assert torch.isfinite(logits).all()
 print("S5 OK — forward → logits [n_samples, n_classes].")
 
 # %% [markdown]
-# ## S6 — train the spine (Checkpoint 0)
+# ## Benchmark context — simple/standard baselines
 #
-# Wrap `SpModel` in `LitClassifier` (CrossEntropy + torchmetrics `{auroc, auprc, f1, bacc}`),
-# inject **train-fold** inverse-frequency class weights (≈`[1,1]` on balanced Schürch — the path
-# runs, the values are near-inert here), and `trainer.fit` a few epochs. Metrics are scored at the
-# **patient level** (`aggregate_by_patient` mean-softmaxes a patient's regions → one prediction).
+# This is the **Schürch CRC, CLR vs DII** task (binary, patient-level). Reported baselines on this
+# exact dataset frame what "good" looks like (from the NotebookLM notes: SORBET benchmarking, Ali
+# et al.):
 #
-# **Success = the spine runs end to end:** train loss ↓, and val/test AUROC/AUPRC/F1/bacc print.
-# Note `bacc`/`f1` sit near chance — the logreg is intentionally underfit (few epochs, minimal
-# model); AUROC/AUPRC already clear chance. Improving those is for later stages, not Checkpoint 0.
+# | Model | Type | AUROC |
+# |---|---|---|
+# | SORBET | spatial GNN | **0.98** (SOTA) |
+# | Augur-SC | non-spatial single-cell | 0.91 |
+# | CITRUS-SC | non-spatial single-cell | 0.86 |
+# | SPACE-GM | spatial GNN | 0.81 |
+# | CytoCommunity | spatial graph | 0.78 |
+#
+# **Our model is a non-spatial bag-of-cells logreg** (mean-pooled `exprs_norm`, no edges) — its
+# closest analogues are Augur-SC / CITRUS-SC (**~0.86–0.91 AUROC**). Ali et al. find spatial edges
+# add only ~ΔAUPR 0.052 here, so cell expression alone is highly predictive: a correctly-fit floor
+# should clear **AUROC 0.80** and approach the non-spatial 0.86–0.91 regime. Watch **AUROC + AUPR**
+# (threshold-free) and **balanced accuracy** (honest under imbalance — currently the metric to move).
+
+# %% [markdown]
+# ## Train the floor model + report
+#
+# Train the bag-of-cells logreg on the single fold **to convergence** (more epochs than the original
+# Checkpoint-0 smoke), tracking the **loss curve + metrics to W&B**. Metrics are scored at the
+# **patient level** (`aggregate_by_patient`). Then visualize loss curves and a patient-level
+# evaluation panel (confusion matrix, ROC, PR, per-class precision/recall).
 
 # %%
+import os
 import warnings
 
 import lightning as L
+from lightning.pytorch.loggers import WandbLogger
 
 from sp_ml.train import LitClassifier, class_weights
 
 warnings.filterwarnings("ignore")
 L.seed_everything(cfg.seed, verbose=False)
+
+EPOCHS = 200            # ↑ from the 40-epoch Checkpoint-0 smoke — let the logreg actually converge
+
+# W&B: loss curve + metrics track live. Online by default (account default entity); set env
+# WANDB_MODE=offline to log locally (sync later), or WANDB_MODE=disabled to skip W&B entirely.
+wb_mode = os.environ.get("WANDB_MODE", "online")
+wandb_logger = (
+    False if wb_mode == "disabled"
+    else WandbLogger(project=cfg.wandb.project, offline=(wb_mode != "online"),
+                     group="schurch-clr_dii-bagcells", name=f"poc-logreg-{EPOCHS}ep",
+                     save_dir="outputs")
+)
 
 w = class_weights(dm.train_labels(), dm.num_classes) if cfg.train.class_weighted else None
 print("class weights (train-fold inverse freq):", None if w is None else [round(float(x), 3) for x in w])
@@ -189,29 +220,95 @@ lit = LitClassifier(model=model, optimizer=optimizer, loss=loss, num_classes=dm.
 
 
 class LossHistory(L.Callback):
+    """Capture epoch-level train & val loss during fit for a local loss curve."""
+
     def __init__(self):
-        self.train = []
+        self.train, self.val = [], []
 
     def on_train_epoch_end(self, trainer, _):
         v = trainer.callback_metrics.get("train/loss")
         if v is not None:
             self.train.append(float(v))
 
+    def on_validation_epoch_end(self, trainer, _):
+        if trainer.state.fn != "fit":     # ignore the post-fit validate/test passes
+            return
+        v = trainer.callback_metrics.get("val/loss")
+        if v is not None:
+            self.val.append(float(v))
+
 
 hist = LossHistory()
-trainer = instantiate(cfg.train.trainer, max_epochs=40, logger=False,
+trainer = instantiate(cfg.train.trainer, max_epochs=EPOCHS, logger=wandb_logger,
                       enable_checkpointing=False, enable_progress_bar=False,
-                      enable_model_summary=False, callbacks=[hist])
+                      enable_model_summary=False, num_sanity_val_steps=0, callbacks=[hist])
 trainer.fit(lit, dm)
+print(f"trained {EPOCHS} epochs | W&B: {wb_mode}")
+
+# %% [markdown]
+# ### Loss curves
 
 # %%
-print("train loss: first=%.4f  last=%.4f  min=%.4f" % (hist.train[0], hist.train[-1], min(hist.train)))
-assert hist.train[-1] < hist.train[0], "train loss did not decrease"
+import matplotlib.pyplot as plt
 
+print("train loss: first=%.4f  last=%.4f  min=%.4f" % (hist.train[0], hist.train[-1], min(hist.train)))
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.plot(range(1, len(hist.train) + 1), hist.train, label="train")
+if hist.val:
+    ax.plot(range(1, len(hist.val) + 1), hist.val, label="val")
+ax.set_xlabel("epoch"); ax.set_ylabel("loss"); ax.legend()
+ax.set_title("Bag-of-cells logreg — loss")
+plt.show()
+
+# %% [markdown]
+# ### Patient-level metrics + benchmark comparison
+
+# %%
 valm = trainer.validate(lit, dm, verbose=False)[0]
 testm = trainer.test(lit, dm, verbose=False)[0]
 keys = ("auroc", "auprc", "f1", "bacc")
 for d, split in [(valm, "val"), (testm, "test")]:
     print("%-5s (patient-level):" % split,
           "  ".join("%s=%.3f" % (k, d[f"{split}/{k}"]) for k in keys))
-print("\nS6 OK — Checkpoint 0: spine trains end to end; patient-level metrics computed.")
+print("\nbaseline context — non-spatial ≈ 0.86–0.91 AUROC (Augur-SC/CITRUS-SC); SOTA spatial ≈ 0.98 (SORBET)")
+
+# %% [markdown]
+# ### Evaluation panel (patient-level, test fold)
+
+# %%
+import numpy as np
+from sklearn.metrics import (
+    ConfusionMatrixDisplay, PrecisionRecallDisplay, RocCurveDisplay, classification_report,
+)
+
+from sp_ml.train import aggregate_by_patient
+
+dev = next(lit.model.parameters()).device
+lit.eval()
+buf = []
+with torch.no_grad():
+    for bb in dm.test_dataloader():
+        bb = bb.to(dev)
+        buf.append((lit.model(bb).softmax(-1).cpu(), bb.y.cpu(), list(bb.patient)))
+probs, yy = aggregate_by_patient(buf)
+probs, yy = probs.numpy(), yy.numpy().astype(int)
+pred, pos = probs.argmax(1), probs[:, 1]      # pos = P(DII)
+classes = list(cfg.task.classes)
+
+print(classification_report(yy, pred, target_names=classes, zero_division=0))
+fig, ax = plt.subplots(1, 3, figsize=(13, 4))
+ConfusionMatrixDisplay.from_predictions(yy, pred, display_labels=classes, ax=ax[0], colorbar=False)
+ax[0].set_title("Confusion (patient-level)")
+RocCurveDisplay.from_predictions(yy, pos, ax=ax[1], name=classes[1])
+ax[1].plot([0, 1], [0, 1], "k--", lw=0.7); ax[1].set_title("ROC")
+PrecisionRecallDisplay.from_predictions(yy, pos, ax=ax[2], name=classes[1])
+ax[2].set_title("PR")
+fig.suptitle(f"{cfg.data.name} · {cfg.task.name} · fold {cfg.cv.fold} — bag-of-cells logreg ({EPOCHS} ep)")
+fig.tight_layout()
+plt.show()
+
+# %%
+import wandb
+
+if wandb_logger:
+    wandb.finish()

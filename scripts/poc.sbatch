@@ -11,6 +11,9 @@
 # the interactive GPU workspace holds it. To run on GPU when an A10G is free, override:
 #     sbatch -p gpu --gres=gpu:a10g:1 scripts/poc.sbatch
 #
+# SLURM logs go to outputs/slurm/ (all runtime artifacts live under outputs/). That dir must
+# pre-exist at submit time — run `mkdir -p outputs/slurm` once after cloning.
+#
 #SBATCH --job-name=sp-poc
 #SBATCH --account=basic
 #SBATCH --partition=defq
@@ -18,8 +21,8 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=6G
 #SBATCH --time=0-00:20
-#SBATCH --output=logs/poc_%j.out
-#SBATCH --error=logs/poc_%j.err
+#SBATCH --output=outputs/slurm/poc_%j.out
+#SBATCH --error=outputs/slurm/poc_%j.err
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-.}"                 # repo root (where sbatch was invoked)

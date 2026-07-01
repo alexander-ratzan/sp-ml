@@ -1,0 +1,8 @@
+# Fast CV geometry for dev/CI — fewer folds, single repeat. Pair with a short
+# `train.trainer.max_epochs=…` override for quick smoke loops. Iterate with `cv=quick`,
+# publish with `cv=nested`.
+n_folds: 3
+n_repeats: 1
+fold: 0
+repeat: 0
+seed: ${seed}

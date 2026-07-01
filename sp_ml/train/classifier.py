@@ -26,7 +26,7 @@ def aggregate_by_patient(buf):
     """Mean softmax over each patient's samples → one prediction/patient.
 
     ``buf`` = list of ``(probs[n,C], y[n], patients:list[str])``. Returns
-    ``(patient_probs[P,C], patient_y[P])`` with patients in first-seen order.
+    ``(patient_probs[P,C], patient_y[P], patient_ids[P])`` in first-seen order.
     """
     probs = torch.cat([b[0] for b in buf])
     y = torch.cat([b[1] for b in buf])
@@ -34,10 +34,11 @@ def aggregate_by_patient(buf):
     groups = OrderedDict()
     for i, p in enumerate(patients):
         groups.setdefault(p, []).append(i)
+    pat_ids = list(groups.keys())
     idx = list(groups.values())
     pat_probs = torch.stack([probs[ix].mean(0) for ix in idx])
     pat_y = torch.stack([y[ix[0]] for ix in idx])      # label constant within a patient
-    return pat_probs, pat_y
+    return pat_probs, pat_y, pat_ids
 
 
 class LitClassifier(LitBase):
@@ -55,6 +56,7 @@ class LitClassifier(LitBase):
             for s in ("val", "test")
         })
         self._buf = {"val": [], "test": []}
+        self.test_predictions = None      # (patient_ids, probs[P,C], y[P]) — set at test end
 
     def _step(self, batch):
         logits = self.model(batch)
@@ -74,7 +76,9 @@ class LitClassifier(LitBase):
     def _epoch_end(self, split):
         if not self._buf[split]:
             return
-        probs, y = aggregate_by_patient(self._buf[split])
+        probs, y, pats = aggregate_by_patient(self._buf[split])
+        if split == "test":
+            self.test_predictions = (pats, probs.detach().cpu(), y.detach().cpu())
         m = self.metrics[split]
         m.update(probs, y)
         self.log_dict(m.compute(), prog_bar=(split == "val"))

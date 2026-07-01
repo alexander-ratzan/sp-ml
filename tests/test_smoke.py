@@ -94,8 +94,8 @@ def test_aggregate_by_patient():
     probs = torch.tensor([[0.9, 0.1], [0.7, 0.3], [0.2, 0.8], [0.4, 0.6]])
     y = torch.tensor([0, 0, 1, 1])
     buf = [(probs, y, ["pa", "pa", "pb", "pb"])]
-    pp, py = aggregate_by_patient(buf)
-    assert pp.shape == (2, 2) and py.tolist() == [0, 1]
+    pp, py, pats = aggregate_by_patient(buf)
+    assert pp.shape == (2, 2) and py.tolist() == [0, 1] and pats == ["pa", "pb"]
     assert torch.allclose(pp[0], torch.tensor([0.8, 0.2]))
     assert torch.allclose(pp[1], torch.tensor([0.3, 0.7]))
 

@@ -41,7 +41,7 @@ class DataCfg:
     graph_kind: str = "knn"
     k: int = 20
     batch_size: int = 8
-    num_workers: int = 8
+    num_workers: int = 0    # bag-of-cells graphs are in-memory → workers add overhead, not speed
     role: str = "cv"                                   # "cv" | "holdout"
     cache_dir: str = "cache/graphs"
 
